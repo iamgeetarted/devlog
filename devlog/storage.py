@@ -50,3 +50,12 @@ def delete_entry(entry_id: int):
     entries = [e for e in entries if e["id"] != entry_id]
     save_entries(entries)
     return len(entries) < before
+
+
+def search_entries(keyword: str, tag: str | None = None) -> list[dict]:
+    entries = load_entries()
+    keyword_lower = keyword.lower()
+    results = [e for e in entries if keyword_lower in e["text"].lower()]
+    if tag:
+        results = [e for e in results if e.get("tag") == tag]
+    return results

@@ -1,52 +1,56 @@
 import argparse
+import os
 import sys
 from datetime import date, timedelta
 
-from .storage import add_entry, get_entries, delete_entry
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table, box
+
+from .storage import add_entry, get_entries, delete_entry, search_entries
+
+console = Console()
 
 
-COLORS = {
-    "reset": "\033[0m",
-    "bold": "\033[1m",
-    "green": "\033[92m",
-    "yellow": "\033[93m",
-    "cyan": "\033[96m",
-    "red": "\033[91m",
-    "dim": "\033[2m",
-}
+def make_entries_table(entries: list[dict]) -> Table:
+    table = Table(
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+        expand=False,
+    )
+    table.add_column("ID", style="dim", justify="right", no_wrap=True)
+    table.add_column("Time", style="dim", no_wrap=True)
+    table.add_column("Tag", style="yellow", no_wrap=True)
+    table.add_column("Entry", style="white")
 
-
-def c(color, text):
-    return f"{COLORS[color]}{text}{COLORS['reset']}"
-
-
-def fmt_tag(tag):
-    if not tag:
-        return ""
-    return c("yellow", f"[{tag}]") + " "
-
-
-def print_entries(entries, title=None):
-    if title:
-        print(c("bold", f"\n{title}"))
-        print(c("dim", "─" * 40))
-
-    if not entries:
-        print(c("dim", "  No entries found."))
-        return
-
-    current_date = None
     for e in entries:
-        if e["date"] != current_date:
-            current_date = e["date"]
-            if not title:
-                print(c("bold", f"\n{current_date}"))
-                print(c("dim", "─" * 40))
-        tag_str = fmt_tag(e.get("tag"))
-        print(f"  {c('dim', str(e['id'])+'.')} {c('dim', e['time'])}  {tag_str}{e['text']}")
+        tag = e.get("tag") or ""
+        table.add_row(str(e["id"]), e["time"], tag, e["text"])
+
+    return table
 
 
-def export_markdown(entries):
+def print_entries(entries: list[dict], title: str | None = None) -> None:
+    if title:
+        if not entries:
+            console.print(Panel("[dim]No entries found.[/dim]", title=title, border_style="dim", box=box.ROUNDED))
+        else:
+            table = make_entries_table(entries)
+            console.print(Panel(table, title=title, border_style="cyan", box=box.ROUNDED))
+    else:
+        if not entries:
+            console.print("[dim]No entries found.[/dim]")
+            return
+        current_date = None
+        for group_date in dict.fromkeys(e["date"] for e in entries):
+            day_entries = [e for e in entries if e["date"] == group_date]
+            table = make_entries_table(day_entries)
+            console.print(Panel(table, title=group_date, border_style="cyan", box=box.ROUNDED))
+
+
+def export_markdown(entries: list[dict]) -> str:
     if not entries:
         return "No entries."
     lines = ["# Dev Log\n"]
@@ -63,7 +67,11 @@ def export_markdown(entries):
 def cmd_add(args):
     text = " ".join(args.text)
     entry = add_entry(text, tag=args.tag)
-    print(c("green", "✓") + f" Logged: {fmt_tag(entry.get('tag'))}{entry['text']} {c('dim', '(' + entry['date'] + ' ' + entry['time'] + ')')}")
+    tag_str = f"[yellow]\\[{entry['tag']}][/yellow] " if entry.get("tag") else ""
+    console.print(
+        f"[green]✓[/green] Logged: {tag_str}{entry['text']} "
+        f"[dim]({entry['date']} {entry['time']})[/dim]"
+    )
 
 
 def cmd_today(args):
@@ -89,16 +97,70 @@ def cmd_export(args):
     if args.output:
         with open(args.output, "w") as f:
             f.write(md)
-        print(c("green", f"✓ Exported to {args.output}"))
+        console.print(f"[green]✓ Exported to {args.output}[/green]")
     else:
         print(md)
 
 
 def cmd_delete(args):
     if delete_entry(args.id):
-        print(c("green", f"✓ Deleted entry {args.id}"))
+        console.print(f"[green]✓ Deleted entry {args.id}[/green]")
     else:
-        print(c("red", f"✗ Entry {args.id} not found"))
+        console.print(f"[red]✗ Entry {args.id} not found[/red]")
+
+
+def cmd_search(args):
+    keyword = " ".join(args.keyword)
+    entries = search_entries(keyword, tag=args.tag)
+    title = f'Search: "{keyword}"'
+    if args.tag:
+        title += f"  [tag={args.tag}]"
+    print_entries(entries, title=title)
+
+
+def cmd_summarize(args):
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        sys.exit(1)
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print(
+            "[red]ANTHROPIC_API_KEY environment variable is not set.[/red]\n"
+            "Export it with: [bold]export ANTHROPIC_API_KEY=your-key[/bold]"
+        )
+        sys.exit(1)
+
+    day = args.date or date.today().isoformat()
+    entries = get_entries(day=day)
+
+    if not entries:
+        console.print(f"[dim]No entries found for {day}.[/dim]")
+        return
+
+    bullet_list = "\n".join(
+        f"- [{e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+        for e in entries
+    )
+    prompt = (
+        f"Here are my developer journal entries for {day}:\n\n"
+        f"{bullet_list}\n\n"
+        "Write a concise paragraph (3-5 sentences) summarizing what was accomplished. "
+        "Use past tense, be specific, and group related work together naturally."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    console.print(f"\n[bold cyan]Summary for {day}[/bold cyan]\n")
+    with client.messages.stream(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=256,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print()
 
 
 def main():
@@ -131,6 +193,15 @@ def main():
     p_del = sub.add_parser("delete", help="Delete an entry by ID")
     p_del.add_argument("id", type=int, help="Entry ID")
     p_del.set_defaults(func=cmd_delete)
+
+    p_search = sub.add_parser("search", help="Search entries by keyword")
+    p_search.add_argument("keyword", nargs="+", help="Keyword(s) to search for")
+    p_search.add_argument("-t", "--tag", help="Filter by tag")
+    p_search.set_defaults(func=cmd_search)
+
+    p_summarize = sub.add_parser("summarize", help="AI-powered summary of a day's entries")
+    p_summarize.add_argument("date", nargs="?", help="Date to summarize (default: today)")
+    p_summarize.set_defaults(func=cmd_summarize)
 
     args = parser.parse_args()
     if not args.command:

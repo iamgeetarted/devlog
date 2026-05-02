@@ -1,5 +1,29 @@
 # devlog
 
+## What's New in v1.2.0
+
+### Rich Terminal UI
+All entry views (`today`, `yesterday`, `log`, `search`) now render in a polished Rich table with rounded borders, colour-coded columns, and a Panel title instead of plain ANSI text.
+
+### `devlog search <keyword>` — full-text search
+Search across all journal entries with an optional tag filter:
+
+```bash
+devlog search "auth middleware"
+devlog search refactor -t feat
+```
+
+### `devlog summarize [date]` — AI-powered daily summary
+Uses the Anthropic API (claude-haiku-4-5-20251001) to produce a concise paragraph summarising the day's work. Requires `ANTHROPIC_API_KEY` set in your environment:
+
+```bash
+export ANTHROPIC_API_KEY=sk-...
+devlog summarize              # summarise today
+devlog summarize 2026-04-28   # summarise a specific date
+```
+
+---
+
 A minimal CLI daily journal for developers. Log what you worked on, view entries by date, and export clean Markdown — all from the terminal.
 
 ## Install

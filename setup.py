@@ -2,8 +2,12 @@ from setuptools import setup, find_packages
 
 setup(
     name="devlog",
-    version="1.0.0",
+    version="1.2.0",
     packages=find_packages(),
+    install_requires=[
+        "rich>=12.0",
+        "anthropic>=0.20.0",
+    ],
     entry_points={
         "console_scripts": [
             "devlog=devlog.cli:main",
