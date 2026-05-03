@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table, box
 
-from .storage import add_entry, get_entries, delete_entry, search_entries
+from .storage import add_entry, get_entries, delete_entry, search_entries, edit_entry, get_stats
 
 console = Console()
 
@@ -118,6 +118,65 @@ def cmd_search(args):
     print_entries(entries, title=title)
 
 
+def cmd_edit(args):
+    entry_id = args.id
+    new_text = " ".join(args.text) if args.text else None
+    # Sentinel: if -t not provided args.tag will be ... (we pass it through)
+    tag = args.tag  # None means clear, string means set, ... means leave unchanged
+    if new_text is None and tag is ...:
+        console.print("[yellow]Nothing to change — provide new text and/or -t TAG[/yellow]")
+        return
+    if edit_entry(entry_id, text=new_text, tag=tag):
+        console.print(f"[green]✓ Updated entry {entry_id}[/green]")
+    else:
+        console.print(f"[red]✗ Entry {entry_id} not found[/red]")
+
+
+def cmd_stats(args):
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+
+    days = args.days
+    stats = get_stats(days=days)
+    by_date = stats["by_date"]
+    tag_counts = stats["tag_counts"]
+    streak = stats["streak"]
+    total = stats["total"]
+
+    # Entries-per-day bar chart (only show days with entries unless --all)
+    BAR_WIDTH = 24
+    max_count = max(by_date.values(), default=1) or 1
+
+    day_table = Table(box=rbox.SIMPLE, show_header=True, header_style="bold cyan", pad_edge=False)
+    day_table.add_column("Date", style="dim", no_wrap=True)
+    day_table.add_column("n", justify="right", style="white", width=3)
+    day_table.add_column("", style="cyan")
+
+    shown = 0
+    for d, count in by_date.items():
+        if count == 0 and not args.all_days:
+            continue
+        bar = "█" * max(1, round(count / max_count * BAR_WIDTH)) if count else ""
+        day_table.add_row(d, str(count) if count else "·", bar)
+        shown += 1
+
+    # Tag breakdown
+    tag_table = Table(box=rbox.SIMPLE, show_header=True, header_style="bold yellow", pad_edge=False)
+    tag_table.add_column("Tag", style="yellow")
+    tag_table.add_column("Count", justify="right")
+
+    for tag, cnt in tag_counts.items():
+        tag_table.add_row(tag, str(cnt))
+
+    console.print(Panel(day_table, title=f"Entries — last {days} days", border_style="cyan", box=rbox.ROUNDED))
+    if tag_counts:
+        console.print(Panel(tag_table, title="Tag breakdown", border_style="yellow", box=rbox.ROUNDED))
+    console.print(
+        f"\n  [bold cyan]Streak:[/bold cyan] {streak} consecutive day{'s' if streak != 1 else ''}  "
+        f"[dim]·[/dim]  [dim]Total entries: {total}[/dim]"
+    )
+
+
 def cmd_summarize(args):
     try:
         import anthropic
@@ -202,6 +261,20 @@ def main():
     p_summarize = sub.add_parser("summarize", help="AI-powered summary of a day's entries")
     p_summarize.add_argument("date", nargs="?", help="Date to summarize (default: today)")
     p_summarize.set_defaults(func=cmd_summarize)
+
+    p_edit = sub.add_parser("edit", help="Edit an existing entry by ID")
+    p_edit.add_argument("id", type=int, help="Entry ID to edit")
+    p_edit.add_argument("text", nargs="*", help="New entry text (omit to keep current)")
+    p_edit.add_argument("-t", "--tag", nargs="?", default=..., const=None,
+                        help="New tag (omit flag to keep current; -t with no value clears the tag)")
+    p_edit.set_defaults(func=cmd_edit)
+
+    p_stats = sub.add_parser("stats", help="Show entry statistics and tag breakdown")
+    p_stats.add_argument("--days", type=int, default=30, metavar="N",
+                         help="Number of past days to include (default: 30)")
+    p_stats.add_argument("--all-days", action="store_true",
+                         help="Show all days including empty ones")
+    p_stats.set_defaults(func=cmd_stats)
 
     args = parser.parse_args()
     if not args.command:

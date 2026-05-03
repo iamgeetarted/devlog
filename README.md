@@ -1,5 +1,47 @@
 # devlog
 
+## What's New in v1.3.0
+
+### `devlog stats [--days N] [--all-days]` — activity dashboard
+
+Renders a Rich bar chart of entries per day for the last N days (default 30), a tag-frequency breakdown, and your current consecutive-logging streak — all in one glance.
+
+```bash
+devlog stats
+devlog stats --days 7
+devlog stats --days 90 --all-days    # include days with zero entries
+```
+
+```
+╭─ Entries — last 30 days ────────────────────────────────╮
+│ Date         n                                           │
+│ 2026-04-10   3  ████████████████████████                │
+│ 2026-04-14   1  ████████                                 │
+│ 2026-04-28   5  ████████████████████████████████████████ │
+╰─────────────────────────────────────────────────────────╯
+╭─ Tag breakdown ───╮
+│ Tag      Count    │
+│ feat        12    │
+│ bug          7    │
+│ deploy       4    │
+╰───────────────────╯
+
+  Streak: 3 consecutive days  ·  Total entries: 47
+```
+
+### `devlog edit <id> [new text] [-t TAG]` — in-place entry editing
+
+Modify the text or tag of any entry by ID without deleting and re-adding it.
+
+```bash
+devlog edit 5 "fixed the null pointer in auth middleware"   # change text
+devlog edit 5 -t bug                                        # change tag only
+devlog edit 5 "updated copy" -t docs                        # change both
+devlog edit 5 -t                                            # clear tag
+```
+
+---
+
 ## What's New in v1.2.0
 
 ### Rich Terminal UI
