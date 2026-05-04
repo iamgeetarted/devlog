@@ -9,6 +9,14 @@ from rich.table import Table, box
 
 from .storage import add_entry, get_entries, delete_entry, search_entries, edit_entry, get_stats
 
+try:
+    from .config import load_config as _load_config
+    _cfg = _load_config()
+except ValueError as _cfg_err:
+    from rich.console import Console as _C
+    _C(stderr=True).print(f"[yellow]devlog: config warning: {_cfg_err}[/yellow]")
+    _cfg: dict = {}
+
 console = Console()
 
 
@@ -64,9 +72,26 @@ def export_markdown(entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def export_json(entries: list[dict]) -> str:
+    import json
+    return json.dumps(entries, indent=2)
+
+
+def export_csv(entries: list[dict]) -> str:
+    import csv
+    import io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "date", "time", "tag", "text"])
+    for e in entries:
+        writer.writerow([e["id"], e["date"], e["time"], e.get("tag") or "", e["text"]])
+    return buf.getvalue()
+
+
 def cmd_add(args):
     text = " ".join(args.text)
-    entry = add_entry(text, tag=args.tag)
+    tag = args.tag or _cfg.get("default_tag")
+    entry = add_entry(text, tag=tag)
     tag_str = f"[yellow]\\[{entry['tag']}][/yellow] " if entry.get("tag") else ""
     console.print(
         f"[green]✓[/green] Logged: {tag_str}{entry['text']} "
@@ -93,13 +118,20 @@ def cmd_log(args):
 
 def cmd_export(args):
     entries = get_entries(day=args.date)
-    md = export_markdown(entries)
+    fmt = args.format or _cfg.get("default_export_format", "markdown")
+    if fmt == "json":
+        content = export_json(entries)
+    elif fmt == "csv":
+        content = export_csv(entries)
+    else:
+        content = export_markdown(entries)
+
     if args.output:
         with open(args.output, "w") as f:
-            f.write(md)
-        console.print(f"[green]✓ Exported to {args.output}[/green]")
+            f.write(content)
+        console.print(f"[green]✓ Exported {len(entries)} entries ({fmt}) to {args.output}[/green]")
     else:
-        print(md)
+        print(content)
 
 
 def cmd_delete(args):
@@ -222,6 +254,32 @@ def cmd_summarize(args):
     print()
 
 
+def cmd_week(args: argparse.Namespace) -> None:
+    import re
+    from datetime import date, timedelta
+
+    today = date.today()
+    if args.week:
+        m = re.match(r"^(\d{4})-?[Ww](\d{1,2})$", args.week)
+        if not m:
+            console.print("[red]Invalid week format. Use YYYY-WNN, e.g. 2026-W18[/red]")
+            return
+        year, week_num = int(m.group(1)), int(m.group(2))
+        jan4 = date(year, 1, 4)
+        monday = jan4 + timedelta(weeks=week_num - 1, days=-jan4.weekday())
+    else:
+        monday = today - timedelta(days=today.weekday())
+
+    days = [monday + timedelta(days=i) for i in range(7)]
+    all_entries: list[dict] = []
+    for d in days:
+        if d <= today:
+            all_entries.extend(get_entries(day=d.isoformat()))
+
+    week_label = monday.strftime("Week of %B %d, %Y")
+    print_entries(all_entries, title=week_label)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="devlog",
@@ -244,9 +302,16 @@ def main():
     p_log.add_argument("date", nargs="?", help="Date (YYYY-MM-DD)")
     p_log.set_defaults(func=cmd_log)
 
-    p_export = sub.add_parser("export", help="Export entries as Markdown")
+    p_export = sub.add_parser("export", help="Export entries as Markdown, JSON, or CSV")
     p_export.add_argument("date", nargs="?", help="Date to export (omit for all)")
     p_export.add_argument("-o", "--output", help="Output file path")
+    p_export.add_argument(
+        "-f", "--format",
+        choices=["markdown", "json", "csv"],
+        default=None,
+        dest="format",
+        help="Output format (default: markdown or config default_export_format)",
+    )
     p_export.set_defaults(func=cmd_export)
 
     p_del = sub.add_parser("delete", help="Delete an entry by ID")
@@ -275,6 +340,11 @@ def main():
     p_stats.add_argument("--all-days", action="store_true",
                          help="Show all days including empty ones")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_week = sub.add_parser("week", help="Show entries for a full ISO week")
+    p_week.add_argument("week", nargs="?", metavar="YYYY-WNN",
+                        help="Week to show, e.g. 2026-W18 (default: current week)")
+    p_week.set_defaults(func=cmd_week)
 
     args = parser.parse_args()
     if not args.command:

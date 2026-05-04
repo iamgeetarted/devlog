@@ -117,3 +117,28 @@ Entries are stored in `~/.devlog/entries.json`. No accounts, no cloud, no tracki
 ## License
 
 MIT
+
+## What's New in v1.4.0
+
+### Config File (`~/.devlog.toml`)
+Persist your preferences without passing flags every time:
+```toml
+data_dir = "~/notes/devlog"      # custom storage location
+default_tag = "work"             # applied when -t is omitted
+default_export_format = "json"   # used by `devlog export`
+```
+
+### Structured Export (`--format json|csv|markdown`)
+Export your log in machine-readable formats:
+```bash
+devlog export --format json > entries.json
+devlog export --format csv -o log.csv
+devlog export 2026-05-04 --format json   # single day as JSON
+```
+
+### Week View (`devlog week`)
+Browse a full ISO week at a glance:
+```bash
+devlog week              # current week
+devlog week 2026-W18     # specific ISO week
+```

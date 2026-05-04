@@ -3,7 +3,21 @@ import os
 from datetime import date
 from pathlib import Path
 
-DATA_DIR = Path.home() / ".devlog"
+def _resolve_data_dir() -> Path:
+    try:
+        cfg_file = Path.home() / ".devlog.toml"
+        if cfg_file.exists():
+            with open(cfg_file, "rb") as f:
+                import tomllib
+                cfg = tomllib.load(f)
+            if "data_dir" in cfg:
+                return Path(cfg["data_dir"]).expanduser()
+    except Exception:
+        pass
+    return Path.home() / ".devlog"
+
+
+DATA_DIR = _resolve_data_dir()
 LOG_FILE = DATA_DIR / "entries.json"
 
 
