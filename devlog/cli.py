@@ -88,6 +88,15 @@ def export_csv(entries: list[dict]) -> str:
     return buf.getvalue()
 
 
+def _print_formatted(entries: list[dict], fmt: str) -> None:
+    if fmt == "json":
+        print(export_json(entries))
+    elif fmt == "markdown":
+        print(export_markdown(entries))
+    elif fmt == "csv":
+        print(export_csv(entries))
+
+
 def cmd_add(args):
     text = " ".join(args.text)
     tag = args.tag or _cfg.get("default_tag")
@@ -99,10 +108,14 @@ def cmd_add(args):
     )
 
 
-def cmd_today(args):
+def cmd_today(args: argparse.Namespace) -> None:
     today = date.today().isoformat()
     entries = get_entries(day=today)
-    print_entries(entries, title=f"Today — {today}")
+    fmt = getattr(args, "format", None)
+    if fmt and fmt != "table":
+        _print_formatted(entries, fmt)
+    else:
+        print_entries(entries, title=f"Today — {today}")
 
 
 def cmd_yesterday(args):
@@ -111,9 +124,13 @@ def cmd_yesterday(args):
     print_entries(entries, title=f"Yesterday — {yesterday}")
 
 
-def cmd_log(args):
+def cmd_log(args: argparse.Namespace) -> None:
     entries = get_entries(day=args.date)
-    print_entries(entries, title=args.date if args.date else None)
+    fmt = getattr(args, "format", None)
+    if fmt and fmt != "table":
+        _print_formatted(entries, fmt)
+    else:
+        print_entries(entries, title=args.date if args.date else None)
 
 
 def cmd_export(args):
@@ -280,6 +297,153 @@ def cmd_week(args: argparse.Namespace) -> None:
     print_entries(all_entries, title=week_label)
 
 
+def cmd_dash(args: argparse.Namespace) -> None:
+    """Live-updating Rich dashboard for today's entries."""
+    import time
+    from datetime import date
+    from rich.live import Live
+    from rich.layout import Layout
+    from rich.panel import Panel
+    from rich.table import Table, box as rbox
+    from rich.align import Align
+    from rich.text import Text
+
+    def build_dashboard() -> Layout:
+        today = date.today().isoformat()
+        entries = get_entries(day=today)
+        stats = get_stats(days=7)
+
+        layout = Layout()
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="main"),
+            Layout(name="footer", size=3),
+        )
+        layout["main"].split_row(
+            Layout(name="entries", ratio=2),
+            Layout(name="sidebar", ratio=1),
+        )
+
+        # Header
+        layout["header"].update(
+            Panel(Align.center(Text("devlog dashboard", style="bold cyan")), border_style="cyan")
+        )
+
+        # Entries table
+        t = Table(box=rbox.SIMPLE, show_header=True, header_style="bold cyan", expand=True)
+        t.add_column("ID", style="dim", justify="right", width=4)
+        t.add_column("Time", style="dim", width=6)
+        t.add_column("Tag", style="yellow", width=10)
+        t.add_column("Entry", style="white")
+        for e in entries:
+            t.add_row(str(e["id"]), e["time"], e.get("tag") or "", e["text"])
+        layout["entries"].update(
+            Panel(t if entries else Align.center(Text("No entries yet today.", style="dim")),
+                  title=f"Today — {today} ({len(entries)} entries)", border_style="cyan")
+        )
+
+        # Sidebar
+        sidebar = Table(box=rbox.SIMPLE, show_header=False, expand=True)
+        sidebar.add_column("Key", style="cyan")
+        sidebar.add_column("Val", style="white", justify="right")
+        sidebar.add_row("Streak", f"{stats['streak']} day{'s' if stats['streak'] != 1 else ''}")
+        sidebar.add_row("Total", str(stats["total"]))
+        sidebar.add_section()
+        for tag, cnt in list(stats["tag_counts"].items())[:8]:
+            sidebar.add_row(f"  [{tag}]", str(cnt))
+        layout["sidebar"].update(Panel(sidebar, title="Stats", border_style="yellow"))
+
+        # Footer
+        ts = time.strftime("%H:%M:%S")
+        layout["footer"].update(
+            Panel(Align.center(Text(f"Refreshed {ts} · Ctrl+C to exit", style="dim")), border_style="dim")
+        )
+        return layout
+
+    try:
+        with Live(build_dashboard(), refresh_per_second=0.5, screen=True) as live:
+            while True:
+                time.sleep(2)
+                live.update(build_dashboard())
+    except KeyboardInterrupt:
+        console.print("[dim]Dashboard closed.[/dim]")
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    """Stream an AI weekly productivity review for a given ISO week."""
+    import os, re
+    from datetime import date, timedelta
+
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+
+    today = date.today()
+    if args.week:
+        m = re.match(r"^(\d{4})-?[Ww](\d{1,2})$", args.week)
+        if not m:
+            console.print("[red]Invalid week format. Use YYYY-WNN, e.g. 2026-W18[/red]")
+            return
+        year, week_num = int(m.group(1)), int(m.group(2))
+        jan4 = date(year, 1, 4)
+        monday = jan4 + timedelta(weeks=week_num - 1, days=-jan4.weekday())
+    else:
+        monday = today - timedelta(days=today.weekday())
+
+    days = [monday + timedelta(days=i) for i in range(7)]
+    all_entries = []
+    for d in days:
+        all_entries.extend(get_entries(day=d.isoformat()))
+
+    week_label = monday.strftime("Week of %B %d, %Y")
+
+    if not all_entries:
+        console.print(f"[dim]No entries found for {week_label}.[/dim]")
+        return
+
+    bullet_list = "\n".join(
+        f"- [{e['date']} {e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+        for e in all_entries
+    )
+
+    tag_counts = {}
+    for e in all_entries:
+        t = e.get("tag")
+        if t:
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+    prompt = (
+        f"Here are my developer journal entries for {week_label}:\n\n"
+        f"{bullet_list}\n\n"
+        f"Tag distribution: {tag_counts}\n\n"
+        "Please provide a concise weekly productivity review covering:\n"
+        "1. Major accomplishments this week (2-3 sentences)\n"
+        "2. Work patterns observed (focus areas, tag trends)\n"
+        "3. One actionable suggestion for next week\n\n"
+        "Be specific and developer-focused. Use markdown formatting with ## headers."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    console.print(f"\n[bold cyan]Weekly Review — {week_label}[/bold cyan]\n")
+    console.print(f"[dim]{len(all_entries)} entries across {sum(1 for d in days if any(e['date'] == d.isoformat() for e in all_entries))} days[/dim]\n")
+
+    with client.messages.stream(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=512,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print("\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="devlog",
@@ -293,6 +457,7 @@ def main():
     p_add.set_defaults(func=cmd_add)
 
     p_today = sub.add_parser("today", help="Show today's entries")
+    p_today.add_argument("-f", "--format", choices=["table", "json", "markdown", "csv"], default="table")
     p_today.set_defaults(func=cmd_today)
 
     p_yesterday = sub.add_parser("yesterday", help="Show yesterday's entries")
@@ -300,6 +465,7 @@ def main():
 
     p_log = sub.add_parser("log", help="Show all entries or a specific date")
     p_log.add_argument("date", nargs="?", help="Date (YYYY-MM-DD)")
+    p_log.add_argument("-f", "--format", choices=["table", "json", "markdown", "csv"], default="table")
     p_log.set_defaults(func=cmd_log)
 
     p_export = sub.add_parser("export", help="Export entries as Markdown, JSON, or CSV")
@@ -345,6 +511,14 @@ def main():
     p_week.add_argument("week", nargs="?", metavar="YYYY-WNN",
                         help="Week to show, e.g. 2026-W18 (default: current week)")
     p_week.set_defaults(func=cmd_week)
+
+    p_dash = sub.add_parser("dash", help="Live-updating Rich dashboard for today's entries")
+    p_dash.set_defaults(func=cmd_dash)
+
+    p_review = sub.add_parser("review", help="AI weekly productivity review (streamed)")
+    p_review.add_argument("--week", metavar="YYYY-WNN",
+                          help="Week to review, e.g. 2026-W18 (default: current week)")
+    p_review.set_defaults(func=cmd_review)
 
     args = parser.parse_args()
     if not args.command:

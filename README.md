@@ -1,5 +1,51 @@
 # devlog
 
+## What's New in v1.5.0
+
+### `devlog dash` — Live Rich Dashboard
+
+A live-updating full-screen terminal dashboard showing today's entries, your streak, total count, and tag breakdown — refreshed every 2 seconds. Press Ctrl+C to exit.
+
+```bash
+devlog dash
+```
+
+```
+╭─ devlog dashboard ────────────────────────────────────────────╮
+│                       devlog dashboard                        │
+╰───────────────────────────────────────────────────────────────╯
+╭─ Today — 2026-05-06 (3 entries) ──╮  ╭─ Stats ──────────────╮
+│  ID  Time  Tag        Entry        │  │ Streak       3 days  │
+│   1  09:14            fixed bug    │  │ Total           47   │
+│   2  11:00  feat      added auth   │  │   [feat]        12   │
+│   3  14:30  deploy    released v2  │  │   [bug]          7   │
+╰────────────────────────────────────╯  ╰──────────────────────╯
+╭─ Refreshed 14:32:10 · Ctrl+C to exit ────────────────────────╮
+```
+
+### `devlog review [--week YYYY-WNN]` — AI Weekly Productivity Review
+
+Streams a concise weekly productivity review from Claude (claude-haiku-4-5-20251001), covering accomplishments, work patterns, and one actionable suggestion for next week. Requires `ANTHROPIC_API_KEY`.
+
+```bash
+export ANTHROPIC_API_KEY=sk-...
+devlog review               # review current week
+devlog review --week 2026-W18   # review a specific ISO week
+```
+
+### `--format` flag for `today` and `log` commands
+
+Output today's or any day's entries as JSON, Markdown, or CSV — pipe them directly into other tools.
+
+```bash
+devlog today --format json
+devlog today -f csv
+devlog log 2026-05-06 --format markdown
+devlog log -f json | jq '.[].text'
+```
+
+---
+
 ## What's New in v1.3.0
 
 ### `devlog stats [--days N] [--all-days]` — activity dashboard
