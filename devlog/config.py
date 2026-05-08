@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 _CONFIG_FILE = Path.home() / ".devlog.toml"
-_VALID_KEYS = {"data_dir", "default_tag", "default_export_format"}
+_VALID_KEYS = {"data_dir", "default_tag", "default_export_format", "templates"}
 
 
 def load_config() -> dict[str, Any]:
@@ -26,5 +26,12 @@ def load_config() -> dict[str, Any]:
 
     if "default_export_format" in raw and raw["default_export_format"] not in {"markdown", "json", "csv"}:
         raise ValueError("config 'default_export_format' must be one of: markdown, json, csv")
+
+    if "templates" in raw:
+        if not isinstance(raw["templates"], dict):
+            raise ValueError("config 'templates' must be a TOML table")
+        for k, v in raw["templates"].items():
+            if not isinstance(v, str):
+                raise ValueError(f"template '{k}' must be a string value")
 
     return raw

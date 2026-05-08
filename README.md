@@ -1,5 +1,81 @@
 # devlog
 
+## What's New in v1.6.0
+
+### Weekly Goals System (`devlog goal`)
+
+Track your weekly intentions alongside your journal. Set goals, mark them complete, and run an AI accountability check that compares your open goals against your actual log entries.
+
+```bash
+# Add a goal for the current ISO week
+devlog goal add "Ship the search API refactor"
+devlog goal add "Write unit tests for auth module"
+
+# List goals (all weeks, or filter to a specific week)
+devlog goal list
+devlog goal list --week 2026-W19
+
+# Mark a goal done
+devlog goal done 1
+
+# AI accountability check: Claude compares goals vs journal entries
+export ANTHROPIC_API_KEY=sk-ant-...
+devlog goal check
+```
+
+```
+Weekly Goals — 2026-W19  (1/2 marked done)
+╭────────────────────────────────────────────────────────────╮
+│ ID  Week      Status   Goal                                 │
+│  1  2026-W19  ✓ done   Ship the search API refactor        │
+│  2  2026-W19  ○ open   Write unit tests for auth module    │
+╰────────────────────────────────────────────────────────────╯
+
+Goal Check — 2026-W19  (1/2 marked done)
+
+- **Search API refactor** — Multiple entries mention completing and deploying
+  the refactor on Wednesday. Looks fully done ✓
+- **Unit tests for auth** — No entries reference auth tests yet. You have
+  2 days left in the week — consider blocking 90 minutes tomorrow.
+```
+
+### Entry Templates (`-T template_name`)
+
+Define reusable entry prefixes in `~/.devlog.toml` to enforce consistent standup formats, PR review notes, or any structured entry type — without re-typing the prefix every time.
+
+```toml
+# ~/.devlog.toml
+[templates]
+standup  = "Standup: "
+review   = "PR review: "
+incident = "Incident: "
+```
+
+```bash
+devlog add -T standup "merged auth PR, working on caching layer next"
+# → logs: "Standup: merged auth PR, working on caching layer next"
+
+devlog add -T review "#1234 approved — minor nits on error handling"
+# → logs: "PR review: #1234 approved — minor nits on error handling"
+```
+
+### Date Range Filtering (`--since` / `--until`)
+
+Filter `log` and `export` commands to an arbitrary date range — ideal for monthly retros, sprint reviews, or exporting a specific time slice.
+
+```bash
+# Show entries for a specific week range
+devlog log --since 2026-05-01 --until 2026-05-07
+
+# Export last sprint as Markdown
+devlog export --since 2026-04-21 --until 2026-05-02 -f markdown -o sprint-42.md
+
+# Export everything from May as JSON
+devlog export --since 2026-05-01 -f json > may.json
+```
+
+---
+
 ## What's New in v1.5.0
 
 ### `devlog dash` — Live Rich Dashboard

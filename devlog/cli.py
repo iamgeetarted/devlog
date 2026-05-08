@@ -99,6 +99,19 @@ def _print_formatted(entries: list[dict], fmt: str) -> None:
 
 def cmd_add(args):
     text = " ".join(args.text)
+
+    # Apply template prefix if -T given
+    if args.template:
+        templates = _cfg.get("templates", {})
+        prefix = templates.get(args.template)
+        if prefix is None:
+            console.print(
+                f"[red]✗ Template '{args.template}' not found in ~/.devlog.toml[/red]\n"
+                f"  Defined templates: {', '.join(templates) or '(none)'}"
+            )
+            return
+        text = prefix + text
+
     tag = args.tag or _cfg.get("default_tag")
     entry = add_entry(text, tag=tag)
     tag_str = f"[yellow]\\[{entry['tag']}][/yellow] " if entry.get("tag") else ""
@@ -125,16 +138,31 @@ def cmd_yesterday(args):
 
 
 def cmd_log(args: argparse.Namespace) -> None:
-    entries = get_entries(day=args.date)
+    since = getattr(args, "since", None)
+    until = getattr(args, "until", None)
+    entries = get_entries(day=args.date, since=since, until=until)
     fmt = getattr(args, "format", None)
+
+    if since or until:
+        parts = []
+        if since:
+            parts.append(f"since {since}")
+        if until:
+            parts.append(f"until {until}")
+        title = "Entries — " + ", ".join(parts)
+    else:
+        title = args.date if args.date else None
+
     if fmt and fmt != "table":
         _print_formatted(entries, fmt)
     else:
-        print_entries(entries, title=args.date if args.date else None)
+        print_entries(entries, title=title)
 
 
 def cmd_export(args):
-    entries = get_entries(day=args.date)
+    since = getattr(args, "since", None)
+    until = getattr(args, "until", None)
+    entries = get_entries(day=args.date, since=since, until=until)
     fmt = args.format or _cfg.get("default_export_format", "markdown")
     if fmt == "json":
         content = export_json(entries)
@@ -170,7 +198,6 @@ def cmd_search(args):
 def cmd_edit(args):
     entry_id = args.id
     new_text = " ".join(args.text) if args.text else None
-    # Sentinel: if -t not provided args.tag will be ... (we pass it through)
     tag = args.tag  # None means clear, string means set, ... means leave unchanged
     if new_text is None and tag is ...:
         console.print("[yellow]Nothing to change — provide new text and/or -t TAG[/yellow]")
@@ -192,7 +219,6 @@ def cmd_stats(args):
     streak = stats["streak"]
     total = stats["total"]
 
-    # Entries-per-day bar chart (only show days with entries unless --all)
     BAR_WIDTH = 24
     max_count = max(by_date.values(), default=1) or 1
 
@@ -201,15 +227,12 @@ def cmd_stats(args):
     day_table.add_column("n", justify="right", style="white", width=3)
     day_table.add_column("", style="cyan")
 
-    shown = 0
     for d, count in by_date.items():
         if count == 0 and not args.all_days:
             continue
         bar = "█" * max(1, round(count / max_count * BAR_WIDTH)) if count else ""
         day_table.add_row(d, str(count) if count else "·", bar)
-        shown += 1
 
-    # Tag breakdown
     tag_table = Table(box=rbox.SIMPLE, show_header=True, header_style="bold yellow", pad_edge=False)
     tag_table.add_column("Tag", style="yellow")
     tag_table.add_column("Count", justify="right")
@@ -324,12 +347,10 @@ def cmd_dash(args: argparse.Namespace) -> None:
             Layout(name="sidebar", ratio=1),
         )
 
-        # Header
         layout["header"].update(
             Panel(Align.center(Text("devlog dashboard", style="bold cyan")), border_style="cyan")
         )
 
-        # Entries table
         t = Table(box=rbox.SIMPLE, show_header=True, header_style="bold cyan", expand=True)
         t.add_column("ID", style="dim", justify="right", width=4)
         t.add_column("Time", style="dim", width=6)
@@ -342,7 +363,6 @@ def cmd_dash(args: argparse.Namespace) -> None:
                   title=f"Today — {today} ({len(entries)} entries)", border_style="cyan")
         )
 
-        # Sidebar
         sidebar = Table(box=rbox.SIMPLE, show_header=False, expand=True)
         sidebar.add_column("Key", style="cyan")
         sidebar.add_column("Val", style="white", justify="right")
@@ -353,7 +373,6 @@ def cmd_dash(args: argparse.Namespace) -> None:
             sidebar.add_row(f"  [{tag}]", str(cnt))
         layout["sidebar"].update(Panel(sidebar, title="Stats", border_style="yellow"))
 
-        # Footer
         ts = time.strftime("%H:%M:%S")
         layout["footer"].update(
             Panel(Align.center(Text(f"Refreshed {ts} · Ctrl+C to exit", style="dim")), border_style="dim")
@@ -413,7 +432,7 @@ def cmd_review(args: argparse.Namespace) -> None:
         for e in all_entries
     )
 
-    tag_counts = {}
+    tag_counts: dict[str, int] = {}
     for e in all_entries:
         t = e.get("tag")
         if t:
@@ -444,6 +463,128 @@ def cmd_review(args: argparse.Namespace) -> None:
     print("\n")
 
 
+def cmd_goal(args: argparse.Namespace) -> None:
+    """Manage weekly goals."""
+    import re
+    from .goals import add_goal, complete_goal, delete_goal, list_goals
+
+    subcmd = args.goal_cmd
+
+    if subcmd == "add":
+        text = " ".join(args.text)
+        goal = add_goal(text, week=getattr(args, "week", None))
+        console.print(
+            f"[green]✓[/green] Goal #{goal['id']} added for [cyan]{goal['week']}[/cyan]: {goal['text']}"
+        )
+
+    elif subcmd == "done":
+        if complete_goal(args.id):
+            console.print(f"[green]✓ Goal #{args.id} marked complete[/green]")
+        else:
+            console.print(f"[red]✗ Goal #{args.id} not found[/red]")
+
+    elif subcmd == "delete":
+        if delete_goal(args.id):
+            console.print(f"[green]✓ Goal #{args.id} deleted[/green]")
+        else:
+            console.print(f"[red]✗ Goal #{args.id} not found[/red]")
+
+    elif subcmd == "list":
+        week = getattr(args, "week", None)
+        goals = list_goals(week=week)
+
+        if not goals:
+            label = f" for {week}" if week else ""
+            console.print(f"[dim]No goals found{label}. Add one with: devlog goal add \"finish X\"[/dim]")
+            return
+
+        from rich.table import Table, box as rbox
+        from rich.panel import Panel
+
+        t = Table(box=rbox.ROUNDED, show_header=True, header_style="bold cyan", border_style="dim")
+        t.add_column("ID", style="dim", justify="right", width=4)
+        t.add_column("Week", style="dim", width=10)
+        t.add_column("Status", width=8, justify="center")
+        t.add_column("Goal", style="white")
+
+        for g in goals:
+            status = "[green]✓ done[/green]" if g["done"] else "[yellow]○ open[/yellow]"
+            t.add_row(str(g["id"]), g["week"], status, g["text"])
+
+        done = sum(1 for g in goals if g["done"])
+        label = f"Goals{' — ' + week if week else ''} ({done}/{len(goals)} done)"
+        console.print(Panel(t, title=label, border_style="cyan", box=rbox.ROUNDED))
+
+    elif subcmd == "check":
+        _cmd_goal_check(args)
+
+
+def _cmd_goal_check(args: argparse.Namespace) -> None:
+    """AI accountability check: compare open goals against this week's entries."""
+    import re
+    from datetime import date, timedelta
+    from .goals import list_goals
+
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    week_days = [monday + timedelta(days=i) for i in range(7)]
+
+    # Current week ISO label
+    iso = today.isocalendar()
+    week_label = f"{iso[0]}-W{iso[1]:02d}"
+
+    goals = list_goals(week=week_label)
+    if not goals:
+        console.print(f"[dim]No goals for {week_label}. Set some with: devlog goal add \"...[/dim]")
+        return
+
+    all_entries: list[dict] = []
+    for d in week_days:
+        if d <= today:
+            all_entries.extend(get_entries(day=d.isoformat()))
+
+    goals_text = "\n".join(
+        f"- [{'✓' if g['done'] else '○'}] #{g['id']}: {g['text']}"
+        for g in goals
+    )
+    entries_text = "\n".join(
+        f"- [{e['date']} {e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+        for e in all_entries
+    ) or "(no journal entries this week yet)"
+
+    prompt = (
+        f"Weekly goals for {week_label}:\n{goals_text}\n\n"
+        f"Journal entries so far this week:\n{entries_text}\n\n"
+        "Based on the journal entries, which goals appear to be on track, in progress, "
+        "or not yet started? Be concise and specific. Finish with one motivational nudge "
+        "for any unaddressed goals. Use markdown bullet points."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    done = sum(1 for g in goals if g["done"])
+    console.print(f"\n[bold cyan]Goal Check — {week_label}[/bold cyan]  [dim]({done}/{len(goals)} marked done)[/dim]\n")
+
+    with client.messages.stream(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print("\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="devlog",
@@ -454,6 +595,8 @@ def main():
     p_add = sub.add_parser("add", help="Add a log entry")
     p_add.add_argument("text", nargs="+", help="Entry text")
     p_add.add_argument("-t", "--tag", help="Tag (e.g. bug, feat, chore)")
+    p_add.add_argument("-T", "--template", metavar="NAME",
+                       help="Expand a named template prefix from ~/.devlog.toml [templates]")
     p_add.set_defaults(func=cmd_add)
 
     p_today = sub.add_parser("today", help="Show today's entries")
@@ -466,6 +609,8 @@ def main():
     p_log = sub.add_parser("log", help="Show all entries or a specific date")
     p_log.add_argument("date", nargs="?", help="Date (YYYY-MM-DD)")
     p_log.add_argument("-f", "--format", choices=["table", "json", "markdown", "csv"], default="table")
+    p_log.add_argument("--since", metavar="YYYY-MM-DD", help="Show entries on or after this date")
+    p_log.add_argument("--until", metavar="YYYY-MM-DD", help="Show entries on or before this date")
     p_log.set_defaults(func=cmd_log)
 
     p_export = sub.add_parser("export", help="Export entries as Markdown, JSON, or CSV")
@@ -478,6 +623,8 @@ def main():
         dest="format",
         help="Output format (default: markdown or config default_export_format)",
     )
+    p_export.add_argument("--since", metavar="YYYY-MM-DD", help="Export entries on or after this date")
+    p_export.add_argument("--until", metavar="YYYY-MM-DD", help="Export entries on or before this date")
     p_export.set_defaults(func=cmd_export)
 
     p_del = sub.add_parser("delete", help="Delete an entry by ID")
@@ -519,6 +666,29 @@ def main():
     p_review.add_argument("--week", metavar="YYYY-WNN",
                           help="Week to review, e.g. 2026-W18 (default: current week)")
     p_review.set_defaults(func=cmd_review)
+
+    # goal subcommand
+    p_goal = sub.add_parser("goal", help="Manage weekly goals")
+    goal_sub = p_goal.add_subparsers(dest="goal_cmd")
+
+    pg_add = goal_sub.add_parser("add", help="Add a new goal")
+    pg_add.add_argument("text", nargs="+", help="Goal description")
+    pg_add.add_argument("--week", metavar="YYYY-WNN",
+                        help="Target week (default: current week)")
+
+    pg_done = goal_sub.add_parser("done", help="Mark a goal as complete")
+    pg_done.add_argument("id", type=int, help="Goal ID")
+
+    pg_del = goal_sub.add_parser("delete", help="Delete a goal")
+    pg_del.add_argument("id", type=int, help="Goal ID")
+
+    pg_list = goal_sub.add_parser("list", help="List goals")
+    pg_list.add_argument("--week", metavar="YYYY-WNN",
+                         help="Filter to a specific week (default: all weeks)")
+
+    pg_check = goal_sub.add_parser("check", help="AI accountability check against this week's entries")
+
+    p_goal.set_defaults(func=cmd_goal)
 
     args = parser.parse_args()
     if not args.command:

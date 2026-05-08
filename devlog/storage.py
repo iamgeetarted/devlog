@@ -51,10 +51,18 @@ def add_entry(text: str, tag: str | None = None):
     return entry
 
 
-def get_entries(day: str | None = None):
+def get_entries(
+    day: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[dict]:
     entries = load_entries()
     if day:
         entries = [e for e in entries if e["date"] == day]
+    if since:
+        entries = [e for e in entries if e["date"] >= since]
+    if until:
+        entries = [e for e in entries if e["date"] <= until]
     return entries
 
 
