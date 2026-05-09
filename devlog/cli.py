@@ -690,9 +690,225 @@ def main():
 
     p_goal.set_defaults(func=cmd_goal)
 
+    p_heatmap = sub.add_parser("heatmap", help="GitHub-style activity heatmap calendar")
+    p_heatmap.add_argument(
+        "--weeks", type=int, default=16, metavar="N",
+        help="Number of weeks to display (default: 16)",
+    )
+    p_heatmap.set_defaults(func=cmd_heatmap)
+
+    p_completions = sub.add_parser("completions", help="Print shell completion script (bash/zsh/fish)")
+    p_completions.add_argument("shell", choices=["bash", "zsh", "fish"], help="Target shell")
+    p_completions.set_defaults(func=cmd_completions)
+
+    p_tags = sub.add_parser("tags", help="List entry tags with counts or rename a tag")
+    tags_sub = p_tags.add_subparsers(dest="tags_cmd")
+    tags_sub.add_parser("list", help="List all tags with entry counts")
+    pt_rename = tags_sub.add_parser("rename", help="Rename a tag across all entries")
+    pt_rename.add_argument("old_tag", help="Existing tag name")
+    pt_rename.add_argument("new_tag", help="New tag name")
+    p_tags.set_defaults(func=cmd_tags)
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
         sys.exit(0)
 
     args.func(args)
+
+
+def cmd_heatmap(args: argparse.Namespace) -> None:
+    """GitHub-style activity heatmap for the last N weeks."""
+    from datetime import date, timedelta
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from rich.text import Text
+
+    weeks = args.weeks
+    today = date.today()
+    start_monday = today - timedelta(days=today.weekday() + 7 * (weeks - 1))
+
+    stats = get_stats(days=weeks * 7 + 7)
+    by_date = stats["by_date"]
+
+    PALETTE = ["[dim]·[/dim]", "[green]▪[/green]", "[green]■[/green]",
+               "[bright_green]■[/bright_green]", "[bold bright_green]■[/bold bright_green]"]
+
+    def _cell(count: int) -> str:
+        if count == 0:
+            return PALETTE[0]
+        if count == 1:
+            return PALETTE[1]
+        if count <= 3:
+            return PALETTE[2]
+        if count <= 6:
+            return PALETTE[3]
+        return PALETTE[4]
+
+    day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    week_starts = [start_monday + timedelta(weeks=w) for w in range(weeks)]
+
+    table = Table(
+        box=None, show_header=True, header_style="dim cyan",
+        pad_edge=False, show_edge=False, show_lines=False,
+    )
+    table.add_column("   ", width=3, no_wrap=True)
+    for w, ws in enumerate(week_starts):
+        table.add_column(
+            ws.strftime("%m/%d") if w % 4 == 0 else "",
+            justify="center", width=2, no_wrap=True,
+        )
+
+    for day_idx in range(7):
+        row = [f"[dim]{day_labels[day_idx]}[/dim]"]
+        for ws in week_starts:
+            d = ws + timedelta(days=day_idx)
+            row.append("  " if d > today else _cell(by_date.get(d.isoformat(), 0)))
+        table.add_row(*row)
+
+    max_count = max(by_date.values(), default=0)
+    total = sum(by_date.values())
+    active_days = sum(1 for c in by_date.values() if c > 0)
+
+    console.print(Panel(table, title=f"Activity heatmap — last {weeks} weeks",
+                        border_style="cyan", box=rbox.ROUNDED))
+    console.print(
+        f"\n  [dim]Total: {total} entries  ·  Active: {active_days} days  "
+        f"·  Peak: {max_count}/day[/dim]\n"
+        f"  [dim]Legend: · 0  ▪ 1  ■ 2-3  [bright_green]■[/bright_green] 4-6  "
+        f"[bold bright_green]■[/bold bright_green] 7+[/dim]"
+    )
+
+
+def cmd_completions(args: argparse.Namespace) -> None:
+    """Print a shell completion script for devlog."""
+    shell = args.shell
+
+    if shell == "bash":
+        script = r"""# devlog bash completion — source this or add to ~/.bashrc:
+# eval "$(devlog completions bash)"
+_devlog_complete() {
+    local cur prev
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    local subcommands="add today yesterday log export delete search edit stats week dash review goal summarize completions heatmap tags"
+    local goal_subcmds="add done delete list check"
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "$subcommands" -- "$cur"))
+    elif [[ $COMP_CWORD -eq 2 ]]; then
+        case $prev in
+            goal)        COMPREPLY=($(compgen -W "$goal_subcmds" -- "$cur")) ;;
+            completions) COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur")) ;;
+            tags)        COMPREPLY=($(compgen -W "list rename" -- "$cur")) ;;
+            export|log|today) COMPREPLY=($(compgen -W "-f --format --since --until" -- "$cur")) ;;
+        esac
+    fi
+}
+complete -F _devlog_complete devlog
+"""
+    elif shell == "zsh":
+        script = r"""#compdef devlog
+# devlog zsh completion — source or add to ~/.zshrc:
+# eval "$(devlog completions zsh)"
+_devlog() {
+    local -a subcommands
+    subcommands=(
+        'add:Add a log entry'
+        'today:Show today'\''s entries'
+        'yesterday:Show yesterday'\''s entries'
+        'log:Show all entries or a specific date'
+        'export:Export entries as Markdown/JSON/CSV'
+        'delete:Delete an entry by ID'
+        'search:Search entries by keyword'
+        'edit:Edit an existing entry by ID'
+        'stats:Show entry statistics and tag breakdown'
+        'week:Show entries for a full ISO week'
+        'dash:Live-updating Rich dashboard'
+        'review:AI weekly productivity review'
+        'goal:Manage weekly goals'
+        'summarize:AI-powered summary of a day'\''s entries'
+        'completions:Generate shell completion script'
+        'heatmap:GitHub-style activity heatmap calendar'
+        'tags:List and manage entry tags'
+    )
+    _arguments -C '1:command:->cmd' '*::arg:->args'
+    case $state in
+        cmd)  _describe 'commands' subcommands ;;
+        args)
+            case $words[1] in
+                goal)        local -a gc; gc=('add:Add' 'done:Mark done' 'delete:Delete' 'list:List' 'check:AI check'); _describe 'goal subcommands' gc ;;
+                completions) _values 'shell' bash zsh fish ;;
+                tags)        local -a tc; tc=('list:List all tags' 'rename:Rename a tag'); _describe 'tag subcommands' tc ;;
+                export|log)  _arguments '-f[format]:format:(markdown json csv)' '--since[since date]:date:' '--until[until date]:date:' ;;
+                heatmap)     _arguments '--weeks[number of weeks]:weeks:' ;;
+            esac ;;
+    esac
+}
+_devlog
+"""
+    elif shell == "fish":
+        script = """# devlog fish completion
+# Save to ~/.config/fish/completions/devlog.fish
+
+set -l cmds add today yesterday log export delete search edit stats week dash review goal summarize completions heatmap tags
+
+complete -c devlog -f -n 'not __fish_seen_subcommand_from $cmds' -a "$cmds"
+complete -c devlog -n '__fish_seen_subcommand_from goal' -a 'add done delete list check'
+complete -c devlog -n '__fish_seen_subcommand_from completions' -a 'bash zsh fish'
+complete -c devlog -n '__fish_seen_subcommand_from tags' -a 'list rename'
+complete -c devlog -n '__fish_seen_subcommand_from export log today' -s f -l format -a 'markdown json csv'
+complete -c devlog -n '__fish_seen_subcommand_from heatmap' -l weeks -d 'Number of weeks to show'
+"""
+    else:
+        console.print(f"[red]Unknown shell '{shell}'. Choose: bash, zsh, fish[/red]")
+        return
+
+    print(script)
+
+
+def cmd_tags(args: argparse.Namespace) -> None:
+    """List all tags with entry counts, or rename a tag across all entries."""
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from collections import Counter
+
+    subcmd = args.tags_cmd
+
+    if subcmd == "list":
+        all_entries = get_entries()
+        counts: Counter = Counter(e.get("tag") for e in all_entries if e.get("tag"))
+        if not counts:
+            console.print("[dim]No tags found. Add tagged entries with: devlog add -t TAG ...[/dim]")
+            return
+
+        t = Table(box=rbox.ROUNDED, show_header=True, header_style="bold yellow", border_style="dim")
+        t.add_column("Tag", style="yellow")
+        t.add_column("Count", justify="right", style="white")
+        t.add_column("", style="cyan")  # bar
+
+        max_c = counts.most_common(1)[0][1] or 1
+        for tag, cnt in counts.most_common():
+            bar = "█" * max(1, round(cnt / max_c * 20))
+            t.add_row(tag, str(cnt), bar)
+
+        console.print(Panel(t, title=f"Tags ({len(counts)} unique, {sum(counts.values())} tagged entries)",
+                            border_style="yellow", box=rbox.ROUNDED))
+
+    elif subcmd == "rename":
+        old_tag, new_tag = args.old_tag, args.new_tag
+        all_entries = get_entries()
+        changed = 0
+        for e in all_entries:
+            if e.get("tag") == old_tag:
+                e["tag"] = new_tag
+                changed += 1
+        if changed == 0:
+            console.print(f"[yellow]No entries with tag '{old_tag}' found.[/yellow]")
+            return
+        from .storage import save_entries
+        save_entries(all_entries)
+        console.print(f"[green]✓ Renamed tag '{old_tag}' → '{new_tag}' across {changed} entries[/green]")
+
+    else:
+        console.print("[dim]Usage: devlog tags list | devlog tags rename OLD NEW[/dim]")

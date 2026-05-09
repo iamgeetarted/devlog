@@ -1,5 +1,72 @@
 # devlog
 
+## What's New in v1.7.0
+
+### `devlog heatmap [--weeks N]` — GitHub-style activity calendar
+
+Renders a colour-coded contribution grid for the last N weeks (default: 16) directly in your terminal — immediately shows quiet patches and productive sprints at a glance.
+
+```bash
+devlog heatmap            # last 16 weeks
+devlog heatmap --weeks 8  # last 8 weeks
+```
+
+```
+╭─ Activity heatmap — last 16 weeks ─────────────────────────────────────────────╮
+│     01/27  02/03  02/10  02/17  02/24  03/03 ...                               │
+│ Mon  ▪      ■      ·      ■      ·      ·                                       │
+│ Tue  ■      ■      ▪      ■      ·      ■                                       │
+│ Wed  ·      ■      ·      ·      ▪      ■                                       │
+│ Thu  ■      ■      ■      ·      ■      ·                                       │
+│ Fri  ■      ·      ■      ■      ■      ■                                       │
+│ Sat  ·      ·      ·      ·      ·      ·                                       │
+│ Sun  ·      ·      ·      ·      ·      ·                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+  Total: 89 entries  ·  Active: 42 days  ·  Peak: 7/day
+  Legend: · 0  ▪ 1  ■ 2-3  ■ 4-6  ■ 7+
+```
+
+### `devlog completions [bash|zsh|fish]` — Shell auto-completion
+
+Generate and install a completion script for your shell so Tab-completion works for all devlog subcommands, flags, and sub-subcommands.
+
+```bash
+# bash — add to ~/.bashrc
+eval "$(devlog completions bash)"
+
+# zsh — add to ~/.zshrc
+eval "$(devlog completions zsh)"
+
+# fish — install permanently
+devlog completions fish > ~/.config/fish/completions/devlog.fish
+```
+
+After sourcing, pressing `Tab` after `devlog` completes subcommands, `devlog goal <Tab>` lists goal sub-commands, `devlog export -f <Tab>` lists format choices, etc.
+
+### `devlog tags` — Tag management
+
+List every tag in your journal with entry counts and a visual frequency bar, or bulk-rename a tag across all historical entries in one command.
+
+```bash
+devlog tags list             # rich table of all tags and counts
+devlog tags rename bug fix   # rename 'bug' → 'fix' everywhere
+```
+
+```
+╭─ Tags (4 unique, 63 tagged entries) ──────────────────────────╮
+│ Tag      Count                                                 │
+│ feat        28  ████████████████████                           │
+│ bug         15  ███████████                                    │
+│ deploy       9  ██████                                         │
+│ chore       11  ████████                                       │
+╰───────────────────────────────────────────────────────────────╯
+
+✓ Renamed tag 'bug' → 'fix' across 15 entries
+```
+
+---
+
 ## What's New in v1.6.0
 
 ### Weekly Goals System (`devlog goal`)
