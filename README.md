@@ -1,5 +1,62 @@
 # devlog
 
+## What's New in v1.8.0
+
+### Mood & Energy Tracking — `devlog add -m 4 "..."` + `devlog mood`
+
+Track your daily mood/energy (1–5) alongside journal entries. View a colour-coded chart of how you've been feeling over time, with optional AI insights to surface trends.
+
+```bash
+# Log with mood (1=rough, 2=meh, 3=okay, 4=good, 5=great)
+devlog add -m 5 "Shipped the auth refactor — feeling great"
+devlog add -m 2 "Debugging a gnarly race condition all day"
+
+# Show mood chart for the last 30 days
+devlog mood
+devlog mood --days 7
+
+# Stream an AI analysis of your mood trends
+devlog mood --insight
+```
+
+```
+╭─ Mood — last 30 days ───────────────────────────────╮
+│  Date        Avg  Chart              Entries          │
+│  2026-05-12  4.5  ████████████████   2               │
+│  2026-05-13  3.0  █████████          1               │
+│  2026-05-14  4.0  ████████████       3               │
+╰─────────────────────────────────────────────────────╯
+  Average: 3.8/5 🙂 good  ·  12 days with mood data
+```
+
+### HTML Export — `devlog export -f html -o log.html`
+
+Generate a polished, self-contained HTML report from all (or filtered) entries. Dark-themed, mobile-friendly, with tag badges, mood indicators, and an activity summary — no external assets required.
+
+```bash
+devlog export -f html -o devlog.html          # all entries
+devlog export -f html --since 2026-05-01 -o may.html
+```
+
+### Daily Reminder — `devlog remind`
+
+Drop into your shell startup or a cron job. Prints a gentle nudge if you haven't logged anything today; exits 0 if you have (scriptable).
+
+```bash
+# ~/.bashrc or ~/.zshrc
+devlog remind || true
+
+# Use in scripts:
+devlog remind && echo "Already logged today" || echo "Remember to log!"
+```
+
+Customise the message in `~/.devlog.toml`:
+```toml
+remind_message = "Hey! Log your progress before you forget."
+```
+
+---
+
 ## What's New in v1.7.0
 
 ### `devlog heatmap [--weeks N]` — GitHub-style activity calendar

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 _CONFIG_FILE = Path.home() / ".devlog.toml"
-_VALID_KEYS = {"data_dir", "default_tag", "default_export_format", "templates"}
+_VALID_KEYS = {"data_dir", "default_tag", "default_export_format", "templates", "remind_message"}
 
 
 def load_config() -> dict[str, Any]:

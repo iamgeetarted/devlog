@@ -36,16 +36,18 @@ def save_entries(entries):
     LOG_FILE.write_text(json.dumps(entries, indent=2))
 
 
-def add_entry(text: str, tag: str | None = None):
+def add_entry(text: str, tag: str | None = None, mood: int | None = None):
     from datetime import datetime
     entries = load_entries()
-    entry = {
+    entry: dict = {
         "id": len(entries) + 1,
         "date": date.today().isoformat(),
         "time": datetime.now().strftime("%H:%M"),
         "text": text,
         "tag": tag,
     }
+    if mood is not None:
+        entry["mood"] = max(1, min(5, mood))
     entries.append(entry)
     save_entries(entries)
     return entry
@@ -121,10 +123,18 @@ def get_stats(days: int = 30) -> dict:
         else:
             break
 
+    # Average mood per day (only for days that have mood data)
+    mood_by_date: dict[str, float] = {}
+    for d in date_range:
+        day_moods = [e["mood"] for e in entries if e["date"] == d and e.get("mood") is not None]
+        if day_moods:
+            mood_by_date[d] = round(sum(day_moods) / len(day_moods), 1)
+
     return {
         "by_date": by_date,
         "tag_counts": dict(tag_counts.most_common()),
         "streak": streak,
         "total": len(entries),
         "days": days,
+        "mood_by_date": mood_by_date,
     }
