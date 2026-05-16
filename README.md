@@ -1,5 +1,73 @@
 # devlog
 
+## What's New in v1.9.0
+
+### `devlog month [YYYY-MM] [--ai]` — Monthly summary & retro
+
+View all entries for a calendar month grouped by ISO week, with tag breakdown and activity stats. Add `--ai` to stream a concise monthly retrospective from Claude.
+
+```bash
+devlog month               # current month
+devlog month 2026-04       # specific month
+devlog month --ai          # with AI monthly retro
+devlog month 2026-04 --ai  # specific month + AI retro
+```
+
+```
+╭─ Month — May 2026 ──────────────────────────────╮
+│  Week       n                                    │
+│  2026-W19   8  ██████████████████               │
+│  2026-W20   5  ███████████                      │
+│  2026-W21   3  ██████                           │
+╰─────────────────────────────────────────────────╯
+╭─ Tags this month ────────╮
+│  Tag    n                 │
+│  feat   9                 │
+│  bug    4                 │
+│  deploy 3                 │
+╰──────────────────────────╯
+
+  May 2026:  20 entries  ·  12/31 active days  ·  3 active weeks  ·  avg 0.6/day
+```
+
+### `devlog import <file>` — Bulk import entries
+
+Import entries from a plain-text file (one line per entry), a JSON array, or a CSV export. Supports `--dry-run` to preview, `--date` to override the date, and `--tag` to set a default tag.
+
+```bash
+# Plain text: one entry per line, optional [tag] prefix
+devlog import notes.txt
+devlog import notes.txt --date 2026-05-10 --tag feat
+
+# JSON array: [{text, tag?, date?, time?}, ...]
+devlog import entries.json
+
+# CSV (with id,date,time,tag,text columns)
+devlog import log.csv
+
+# Preview without saving
+devlog import notes.txt --dry-run
+```
+
+Plain text format:
+```
+[feat] finished the auth refactor
+[bug] fixed null pointer in session handler
+deployed v2.1 to staging
+```
+
+### `devlog add --suggest-tag` / `-s` — AI tag suggestion
+
+Add `-s` to any `devlog add` command to get an AI-suggested tag when you haven't specified one. Claude Haiku analyses the entry text and recommends a tag.
+
+```bash
+devlog add -s "fixed a race condition in the job queue"
+# ✓ Logged: fixed a race condition in the job queue  (2026-05-16 14:22)
+#   AI suggests tag: bug  Accept? devlog edit 47 -t bug
+```
+
+---
+
 ## What's New in v1.8.0
 
 ### Mood & Energy Tracking — `devlog add -m 4 "..."` + `devlog mood`

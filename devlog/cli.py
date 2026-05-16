@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table, box
 
-from .storage import add_entry, get_entries, delete_entry, search_entries, edit_entry, get_stats, load_entries
+from .storage import add_entry, get_entries, delete_entry, search_entries, edit_entry, get_stats, load_entries, save_entries
 
 try:
     from .config import load_config as _load_config
@@ -195,6 +195,36 @@ def _mood_style(mood: int) -> str:
     return ["", "red", "yellow", "dim", "cyan", "green"][mood]
 
 
+def _suggest_tag_for_entry(entry: dict) -> None:
+    """Use Claude Haiku to suggest a tag for an untagged entry."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return
+    try:
+        import anthropic
+    except ImportError:
+        return
+
+    client = anthropic.Anthropic(api_key=api_key)
+    prompt = (
+        f"Given this developer journal entry: \"{entry['text']}\"\n\n"
+        "Suggest ONE short tag (1-2 words, lowercase, no spaces — use hyphens if needed). "
+        "Common tags: feat, bug, fix, docs, chore, deploy, review, meeting, research, refactor. "
+        "Reply with ONLY the tag, nothing else."
+    )
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=16,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        suggested = resp.content[0].text.strip().lower().split()[0]
+        console.print(f"  [dim]AI suggests tag:[/dim] [yellow]{suggested}[/yellow]  "
+                      f"[dim]Accept? devlog edit {entry['id']} -t {suggested}[/dim]")
+    except Exception:
+        pass
+
+
 def cmd_add(args):
     text = " ".join(args.text)
 
@@ -222,6 +252,10 @@ def cmd_add(args):
         f"[green]✓[/green] Logged: {tag_str}{entry['text']}{mood_str} "
         f"[dim]({entry['date']} {entry['time']})[/dim]"
     )
+
+    # After the entry is saved and printed, offer tag suggestion if requested
+    if getattr(args, "suggest_tag", False) and not (args.tag or _cfg.get("default_tag")):
+        _suggest_tag_for_entry(entry)
 
 
 def cmd_today(args: argparse.Namespace) -> None:
@@ -704,6 +738,8 @@ def main():
                        help="Mood/energy level: 1=rough 2=meh 3=okay 4=good 5=great")
     p_add.add_argument("-T", "--template", metavar="NAME",
                        help="Expand a named template prefix from ~/.devlog.toml [templates]")
+    p_add.add_argument("-s", "--suggest-tag", action="store_true",
+                       help="Use AI to suggest a tag for this entry (requires ANTHROPIC_API_KEY)")
     p_add.set_defaults(func=cmd_add)
 
     p_today = sub.add_parser("today", help="Show today's entries")
@@ -818,6 +854,24 @@ def main():
     p_completions.add_argument("shell", choices=["bash", "zsh", "fish"], help="Target shell")
     p_completions.set_defaults(func=cmd_completions)
 
+    p_month = sub.add_parser("month", help="Monthly entry summary with optional AI retro")
+    p_month.add_argument("month", nargs="?", metavar="YYYY-MM",
+                         help="Month to view, e.g. 2026-05 (default: current month)")
+    p_month.add_argument("--ai", action="store_true",
+                         help="Stream an AI monthly retro (requires ANTHROPIC_API_KEY)")
+    p_month.set_defaults(func=cmd_month)
+
+    p_import = sub.add_parser("import", help="Bulk import entries from a text/JSON/CSV file")
+    p_import.add_argument("file", help="Path to the import file")
+    p_import.add_argument("--date", metavar="YYYY-MM-DD",
+                          help="Override date for imported entries (default: today)")
+    p_import.add_argument("--tag", help="Default tag for imported entries")
+    p_import.add_argument("--format", choices=["text", "json", "csv"], default=None,
+                          help="Force file format (auto-detected from extension by default)")
+    p_import.add_argument("--dry-run", action="store_true",
+                          help="Preview what would be imported without saving")
+    p_import.set_defaults(func=cmd_import)
+
     p_tags = sub.add_parser("tags", help="List entry tags with counts or rename a tag")
     tags_sub = p_tags.add_subparsers(dest="tags_cmd")
     tags_sub.add_parser("list", help="List all tags with entry counts")
@@ -908,7 +962,7 @@ _devlog_complete() {
     local cur prev
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    local subcommands="add today yesterday log export delete search edit stats week dash review goal summarize completions heatmap tags"
+    local subcommands="add today yesterday log export delete search edit stats week dash review goal summarize completions heatmap tags mood remind month import"
     local goal_subcmds="add done delete list check"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
@@ -948,6 +1002,10 @@ _devlog() {
         'completions:Generate shell completion script'
         'heatmap:GitHub-style activity heatmap calendar'
         'tags:List and manage entry tags'
+        'mood:Show mood/energy chart for recent entries'
+        'remind:Print a reminder if no entries logged today'
+        'month:Monthly entry summary with optional AI retro'
+        'import:Bulk import entries from a text/JSON/CSV file'
     )
     _arguments -C '1:command:->cmd' '*::arg:->args'
     case $state in
@@ -968,7 +1026,7 @@ _devlog
         script = """# devlog fish completion
 # Save to ~/.config/fish/completions/devlog.fish
 
-set -l cmds add today yesterday log export delete search edit stats week dash review goal summarize completions heatmap tags
+set -l cmds add today yesterday log export delete search edit stats week dash review goal summarize completions heatmap tags mood remind month import
 
 complete -c devlog -f -n 'not __fish_seen_subcommand_from $cmds' -a "$cmds"
 complete -c devlog -n '__fish_seen_subcommand_from goal' -a 'add done delete list check'
@@ -1088,6 +1146,225 @@ def cmd_remind(args: argparse.Namespace) -> None:
         console.print(f"[yellow]⊙[/yellow] {msg}")
         console.print("[dim]  Add one with: devlog add \"your note here\"[/dim]")
         sys.exit(1)
+
+
+def cmd_month(args: argparse.Namespace) -> None:
+    """Show a monthly summary of entries with week breakdown and optional AI retro."""
+    import re
+    from calendar import monthrange
+    from datetime import date
+    from collections import Counter
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from rich.columns import Columns
+
+    today = date.today()
+    if args.month:
+        m = re.match(r'^(\d{4})-(\d{2})$', args.month)
+        if not m:
+            console.print("[red]Invalid month format. Use YYYY-MM, e.g. 2026-05[/red]")
+            return
+        year, month_num = int(m.group(1)), int(m.group(2))
+    else:
+        year, month_num = today.year, today.month
+
+    month_label = date(year, month_num, 1).strftime("%B %Y")
+    _, days_in_month = monthrange(year, month_num)
+    month_prefix = f"{year}-{month_num:02d}"
+
+    all_entries = load_entries()
+    entries = [e for e in all_entries if e["date"].startswith(month_prefix)]
+
+    # Group by ISO week
+    weeks: dict[str, list[dict]] = {}
+    for e in entries:
+        d = date.fromisoformat(e["date"])
+        iso = d.isocalendar()
+        wk = f"{iso[0]}-W{iso[1]:02d}"
+        weeks.setdefault(wk, []).append(e)
+
+    tag_counts: Counter = Counter(e.get("tag") for e in entries if e.get("tag"))
+    active_days = len({e["date"] for e in entries})
+    avg_per_day = len(entries) / days_in_month if days_in_month else 0
+
+    # Week breakdown table
+    wk_table = Table(box=rbox.SIMPLE, show_header=True, header_style="bold cyan", pad_edge=False)
+    wk_table.add_column("Week", style="cyan", no_wrap=True)
+    wk_table.add_column("n", justify="right", style="white", width=4)
+    wk_table.add_column("", style="cyan")
+    max_wk = max((len(v) for v in weeks.values()), default=1) or 1
+    for wk in sorted(weeks):
+        cnt = len(weeks[wk])
+        bar = "█" * max(1, round(cnt / max_wk * 18))
+        wk_table.add_row(wk, str(cnt), bar)
+
+    console.print(Panel(wk_table, title=f"Month — {month_label}", border_style="cyan", box=rbox.ROUNDED))
+
+    if tag_counts:
+        tg_table = Table(box=rbox.SIMPLE, show_header=True, header_style="bold yellow", pad_edge=False)
+        tg_table.add_column("Tag", style="yellow")
+        tg_table.add_column("n", justify="right", style="white", width=4)
+        max_c = tag_counts.most_common(1)[0][1] or 1
+        for tag, cnt in tag_counts.most_common(10):
+            tg_table.add_row(tag, str(cnt))
+        console.print(Panel(tg_table, title="Tags this month", border_style="yellow", box=rbox.ROUNDED))
+
+    console.print(
+        f"\n  [bold cyan]{month_label}:[/bold cyan]  "
+        f"[dim]{len(entries)} entries  ·  {active_days}/{days_in_month} active days  "
+        f"·  {len(weeks)} active weeks  ·  avg {avg_per_day:.1f}/day[/dim]"
+    )
+
+    if not entries:
+        console.print("[dim]No entries for this month.[/dim]")
+        return
+
+    if getattr(args, "ai", False):
+        _cmd_month_ai(entries, month_label, tag_counts)
+
+
+def _cmd_month_ai(entries: list[dict], month_label: str, tag_counts: "Counter") -> None:
+    """Stream an AI monthly retro for the given entries."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+
+    bullet_list = "\n".join(
+        f"- [{e['date']} {e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+        for e in entries
+    )
+    prompt = (
+        f"Here are my developer journal entries for {month_label}:\n\n"
+        f"{bullet_list}\n\n"
+        f"Tag distribution: {dict(tag_counts)}\n\n"
+        "Write a concise monthly retro (4-6 sentences) covering:\n"
+        "1. Major themes and accomplishments this month\n"
+        "2. Any patterns or notable work rhythms\n"
+        "3. One goal or focus area to carry into next month\n\n"
+        "Be specific and developer-focused. Use markdown."
+    )
+    client = anthropic.Anthropic(api_key=api_key)
+    console.print(f"\n[bold cyan]Monthly Retro — {month_label}[/bold cyan]\n")
+    with client.messages.stream(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print("\n")
+
+
+def cmd_import(args: argparse.Namespace) -> None:
+    """Bulk import entries from a plain-text, JSON, or CSV file."""
+    import json as _json
+    import csv as _csv
+    import io
+    from datetime import date, datetime
+    from pathlib import Path
+
+    path = Path(args.file)
+    if not path.exists():
+        console.print(f"[red]File not found: {path}[/red]")
+        return
+
+    raw = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not raw:
+        console.print("[yellow]File is empty.[/yellow]")
+        return
+
+    # Detect format
+    fmt = args.format
+    if fmt is None:
+        suffix = path.suffix.lower()
+        if suffix == ".json":
+            fmt = "json"
+        elif suffix == ".csv":
+            fmt = "csv"
+        else:
+            fmt = "text"
+
+    new_entries: list[dict] = []
+    default_date = args.date or date.today().isoformat()
+    default_tag = args.tag or _cfg.get("default_tag")
+
+    if fmt == "json":
+        try:
+            data = _json.loads(raw)
+        except _json.JSONDecodeError as e:
+            console.print(f"[red]JSON parse error: {e}[/red]")
+            return
+        if not isinstance(data, list):
+            console.print("[red]JSON file must contain an array of entry objects.[/red]")
+            return
+        for obj in data:
+            if not isinstance(obj, dict) or not obj.get("text"):
+                continue
+            new_entries.append({
+                "text": str(obj["text"]),
+                "tag": obj.get("tag") or default_tag,
+                "date": obj.get("date") or default_date,
+                "time": obj.get("time") or datetime.now().strftime("%H:%M"),
+            })
+
+    elif fmt == "csv":
+        reader = _csv.DictReader(io.StringIO(raw))
+        for row in reader:
+            text = row.get("text", "").strip()
+            if not text:
+                continue
+            new_entries.append({
+                "text": text,
+                "tag": row.get("tag") or default_tag,
+                "date": row.get("date") or default_date,
+                "time": row.get("time") or datetime.now().strftime("%H:%M"),
+            })
+
+    else:  # plain text
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Optional inline tag: [tag] entry text
+            tag = default_tag
+            import re as _re
+            m = _re.match(r'^\[([^\]]+)\]\s+(.*)', line)
+            if m:
+                tag, line = m.group(1), m.group(2)
+            new_entries.append({
+                "text": line,
+                "tag": tag,
+                "date": default_date,
+                "time": datetime.now().strftime("%H:%M"),
+            })
+
+    if not new_entries:
+        console.print("[yellow]No valid entries found in file.[/yellow]")
+        return
+
+    if args.dry_run:
+        console.print(f"[cyan]Dry run — {len(new_entries)} entries would be imported:[/cyan]\n")
+        for i, e in enumerate(new_entries[:20], 1):
+            tag_str = f"[yellow]\\[{e['tag']}][/yellow] " if e.get("tag") else ""
+            console.print(f"  [dim]{i}.[/dim] {e['date']} {tag_str}{e['text']}")
+        if len(new_entries) > 20:
+            console.print(f"  [dim]... and {len(new_entries) - 20} more[/dim]")
+        return
+
+    # Load and append
+    existing = load_entries()
+    next_id = max((e["id"] for e in existing), default=0) + 1
+    for e in new_entries:
+        e["id"] = next_id
+        next_id += 1
+    save_entries(existing + new_entries)
+    console.print(f"[green]✓ Imported {len(new_entries)} entries from {path.name}[/green]")
 
 
 def cmd_tags(args: argparse.Namespace) -> None:
