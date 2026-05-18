@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="devlog",
-    version="1.9.0",
+    version="2.0.0",
     packages=find_packages(),
     install_requires=[
         "rich>=12.0",

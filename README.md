@@ -1,5 +1,76 @@
 # devlog
 
+## What's New in v2.0.0
+
+### `devlog semantic <query> [--top N]` — Semantic search with TF-IDF
+
+Find entries by meaning, not just keywords. Uses a pure-Python TF-IDF cosine similarity engine (no external ML dependencies) to rank all entries by relevance to your natural-language query.
+
+```bash
+devlog semantic "database performance issues"
+devlog semantic "auth refactor" --top 5
+devlog semantic "deployment problems production"
+```
+
+```
+╭─ Semantic: "database performance issues" ─────────────────────────────────────╮
+│  Score   Date          Tag        Entry                                        │
+│  0.847   2026-05-10    bug        fixed slow query on users table              │
+│  0.712   2026-05-08    refactor   optimised DB connection pool                 │
+│  0.634   2026-05-14    feat       added query caching layer                    │
+╰────────────────────────────────────────────────────────────────────────────────╯
+```
+
+Works entirely offline — no API key required. The TF-IDF vectors are built fresh from your corpus on each query.
+
+### `devlog ai-tag [--count N]` — AI batch tagging
+
+Automatically tag all untagged entries in bulk using Claude Haiku. Processes entries one by one and saves results immediately. Requires `ANTHROPIC_API_KEY`.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+
+devlog ai-tag              # tag all untagged entries
+devlog ai-tag --count 20   # tag only the first 20 untagged entries
+devlog ai-tag -n 5         # short form
+```
+
+```
+Auto-tagging 12 untagged entries...
+  #3 fixed null pointer in auth middleware → bug
+  #7 refactored DB connection pool → refactor
+  #9 deployed v2.1.3 to staging → deploy
+  #11 reviewed PR #88 auth changes → review
+  ...
+
+✓ Tagged 12 entries
+```
+
+### `devlog focus [--all-hours]` — Focus hours analysis
+
+Discover when you're most productive by analysing the timestamps of all your journal entries. Displays a visual bar chart by hour of day and identifies your peak hour and peak period.
+
+```bash
+devlog focus               # show active hours only
+devlog focus --all-hours   # show all 24 hours
+```
+
+```
+╭─ Focus Hours ──────────────────────────────────╮
+│  Hour    n                                      │
+│  09:00   8  ████████████████████               │
+│  10:00  12  ████████████████████████████████   │
+│  11:00   9  ██████████████████████             │
+│  14:00  15  ████████████████████████████████   │
+│  15:00  11  ████████████████████████████       │
+│  16:00   6  ██████████████                     │
+╰────────────────────────────────────────────────╯
+
+  Peak hour: 14:00  ·  Peak period: afternoon  ·  61 entries analysed
+```
+
+---
+
 ## What's New in v1.9.0
 
 ### `devlog month [YYYY-MM] [--ai]` — Monthly summary & retro

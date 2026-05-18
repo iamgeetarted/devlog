@@ -724,6 +724,148 @@ def _cmd_goal_check(args: argparse.Namespace) -> None:
     print("\n")
 
 
+def cmd_semantic(args: argparse.Namespace) -> None:
+    """Semantic search through all entries using TF-IDF cosine similarity."""
+    from .semantic import semantic_search
+    query = " ".join(args.query)
+    entries = load_entries()
+    results = semantic_search(query, entries, top_k=args.top)
+    if not results:
+        console.print("[dim]No semantically similar entries found.[/dim]")
+        return
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    t = Table(box=rbox.ROUNDED, show_header=True, header_style="bold cyan", border_style="dim")
+    t.add_column("Score", justify="right", style="cyan", width=7)
+    t.add_column("Date", style="dim", width=12)
+    t.add_column("Tag", style="yellow", width=10)
+    t.add_column("Entry", style="white")
+    for entry, score in results:
+        t.add_row(f"{score:.3f}", entry["date"], entry.get("tag") or "", entry["text"])
+    console.print(Panel(t, title=f'Semantic: "{query}"', border_style="cyan", box=rbox.ROUNDED))
+
+
+def cmd_ai_tag(args: argparse.Namespace) -> None:
+    """Auto-tag untagged entries in bulk using Claude Haiku."""
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+
+    all_entries = load_entries()
+    untagged = [e for e in all_entries if not e.get("tag")]
+    if not untagged:
+        console.print("[dim]All entries already have tags.[/dim]")
+        return
+    limit = args.count if args.count else len(untagged)
+    batch = untagged[:limit]
+    console.print(f"[cyan]Auto-tagging {len(batch)} untagged entries...[/cyan]")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    tagged_count = 0
+
+    for entry in batch:
+        prompt = (
+            f"Developer journal entry: \"{entry['text']}\"\n\n"
+            "Suggest ONE short tag (1-2 words, lowercase, hyphens only). "
+            "Common tags: feat, bug, fix, docs, chore, deploy, review, meeting, research, refactor, test, infra. "
+            "Reply with ONLY the tag."
+        )
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=16,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            tag = resp.content[0].text.strip().lower().split()[0]
+            # Update entry in all_entries
+            for e in all_entries:
+                if e["id"] == entry["id"]:
+                    e["tag"] = tag
+                    break
+            console.print(f"  [dim]#{entry['id']}[/dim] {entry['text'][:50]} → [yellow]{tag}[/yellow]")
+            tagged_count += 1
+        except Exception as exc:
+            console.print(f"  [red]✗ #{entry['id']}: {exc}[/red]")
+
+    if tagged_count:
+        from .storage import save_entries
+        save_entries(all_entries)
+        console.print(f"\n[green]✓ Tagged {tagged_count} entries[/green]")
+
+
+def cmd_focus(args: argparse.Namespace) -> None:
+    """Show when you're most productive based on entry timing."""
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from rich.text import Text
+    from collections import Counter
+
+    all_entries = load_entries()
+    if not all_entries:
+        console.print("[dim]No entries yet.[/dim]")
+        return
+
+    hour_counts: Counter = Counter()
+    for e in all_entries:
+        try:
+            hour = int(e["time"].split(":")[0])
+            hour_counts[hour] += 1
+        except (ValueError, IndexError, KeyError):
+            pass
+
+    if not hour_counts:
+        console.print("[dim]No time data available.[/dim]")
+        return
+
+    max_count = max(hour_counts.values()) or 1
+    total = sum(hour_counts.values())
+
+    BLOCKS = ["░", "▒", "▓", "█"]
+    def _bar(count: int) -> str:
+        width = max(1, round(count / max_count * 20))
+        level = min(3, round(count / max_count * 3))
+        style_map = {0: "dim", 1: "cyan", 2: "bright_cyan", 3: "bold bright_cyan"}
+        return f"[{style_map[level]}]{BLOCKS[level] * width}[/{style_map[level]}]"
+
+    PERIODS = {
+        "early morning": range(5, 9),
+        "morning": range(9, 12),
+        "afternoon": range(12, 17),
+        "evening": range(17, 21),
+        "night": range(21, 24),
+    }
+
+    t = Table(box=rbox.SIMPLE, show_header=True, header_style="bold cyan", pad_edge=False)
+    t.add_column("Hour", style="dim", width=6, no_wrap=True)
+    t.add_column("n", justify="right", style="white", width=4)
+    t.add_column("", style="cyan")
+
+    for h in range(24):
+        cnt = hour_counts.get(h, 0)
+        if cnt == 0 and not getattr(args, "all_hours", False):
+            continue
+        label = f"{h:02d}:00"
+        t.add_row(label, str(cnt) if cnt else "·", _bar(cnt) if cnt else "")
+
+    # Find peak period
+    period_counts = {p: sum(hour_counts.get(h, 0) for h in hrs) for p, hrs in PERIODS.items()}
+    peak_period = max(period_counts, key=period_counts.get)
+    peak_hour = max(hour_counts, key=hour_counts.get)
+
+    console.print(Panel(t, title="Focus Hours", border_style="cyan", box=rbox.ROUNDED))
+    console.print(
+        f"\n  [bold cyan]Peak hour:[/bold cyan] {peak_hour:02d}:00  "
+        f"[dim]·[/dim]  [bold cyan]Peak period:[/bold cyan] {peak_period}  "
+        f"[dim]·[/dim]  [dim]{total} entries analysed[/dim]"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="devlog",
@@ -871,6 +1013,19 @@ def main():
     p_import.add_argument("--dry-run", action="store_true",
                           help="Preview what would be imported without saving")
     p_import.set_defaults(func=cmd_import)
+
+    p_sem = sub.add_parser("semantic", help="Semantic search using TF-IDF cosine similarity")
+    p_sem.add_argument("query", nargs="+", help="Natural language search query")
+    p_sem.add_argument("--top", type=int, default=10, metavar="N", help="Number of results (default: 10)")
+    p_sem.set_defaults(func=cmd_semantic)
+
+    p_aitag = sub.add_parser("ai-tag", help="Auto-tag untagged entries in bulk using AI")
+    p_aitag.add_argument("--count", "-n", type=int, metavar="N", help="Max entries to tag (default: all untagged)")
+    p_aitag.set_defaults(func=cmd_ai_tag)
+
+    p_focus = sub.add_parser("focus", help="Show your most productive hours based on entry timing")
+    p_focus.add_argument("--all-hours", action="store_true", help="Show all 24 hours including empty ones")
+    p_focus.set_defaults(func=cmd_focus)
 
     p_tags = sub.add_parser("tags", help="List entry tags with counts or rename a tag")
     tags_sub = p_tags.add_subparsers(dest="tags_cmd")
