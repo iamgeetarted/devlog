@@ -421,8 +421,19 @@ def cmd_summarize(args):
         "Use past tense, be specific, and group related work together naturally."
     )
 
-    client = anthropic.Anthropic(api_key=api_key)
+    from .cache import make_key, cache_get, cache_set
+    cache_key = make_key(f"summarize:{day}:{bullet_list}")
+    cached = cache_get(cache_key)
+
     console.print(f"\n[bold cyan]Summary for {day}[/bold cyan]\n")
+
+    if cached and not getattr(args, "no_cache", False):
+        console.print(cached)
+        console.print("\n[dim]  (cached — run with --no-cache to regenerate)[/dim]")
+        return
+
+    client = anthropic.Anthropic(api_key=api_key)
+    collected = []
     with client.messages.stream(
         model="claude-haiku-4-5-20251001",
         max_tokens=256,
@@ -430,7 +441,9 @@ def cmd_summarize(args):
     ) as stream:
         for text in stream.text_stream:
             print(text, end="", flush=True)
+            collected.append(text)
     print()
+    cache_set(cache_key, "".join(collected))
 
 
 def cmd_week(args: argparse.Namespace) -> None:
@@ -923,6 +936,7 @@ def main():
 
     p_summarize = sub.add_parser("summarize", help="AI-powered summary of a day's entries")
     p_summarize.add_argument("date", nargs="?", help="Date to summarize (default: today)")
+    p_summarize.add_argument("--no-cache", action="store_true", help="Skip cache and regenerate from AI")
     p_summarize.set_defaults(func=cmd_summarize)
 
     p_edit = sub.add_parser("edit", help="Edit an existing entry by ID")
@@ -1026,6 +1040,22 @@ def main():
     p_focus = sub.add_parser("focus", help="Show your most productive hours based on entry timing")
     p_focus.add_argument("--all-hours", action="store_true", help="Show all 24 hours including empty ones")
     p_focus.set_defaults(func=cmd_focus)
+
+    p_sync_git = sub.add_parser("sync-git", help="Import recent git commits as journal entries")
+    p_sync_git.add_argument("path", nargs="?", default=".", help="Path to git repo (default: .)")
+    p_sync_git.add_argument("--since", metavar="TIMESPEC",
+                            help="How far back to look (default: '1 day ago'). Examples: '7 days ago', '2026-05-01'")
+    p_sync_git.add_argument("--tag", default="commit", help="Tag for imported entries (default: commit)")
+    p_sync_git.add_argument("--dry-run", action="store_true", help="Preview without saving")
+    p_sync_git.set_defaults(func=cmd_sync_git)
+
+    p_timer = sub.add_parser("timer", help="Pomodoro-style countdown timer with auto-log on completion")
+    p_timer.add_argument("minutes", type=int, nargs="?", default=25,
+                         help="Timer duration in minutes (default: 25)")
+    p_timer.add_argument("--label", "-l", metavar="TEXT",
+                         help="Label for this session (default: 'Nm session')")
+    p_timer.add_argument("--tag", "-t", help="Tag for the auto-logged entry (default: focus)")
+    p_timer.set_defaults(func=cmd_timer)
 
     p_tags = sub.add_parser("tags", help="List entry tags with counts or rename a tag")
     tags_sub = p_tags.add_subparsers(dest="tags_cmd")
@@ -1520,6 +1550,143 @@ def cmd_import(args: argparse.Namespace) -> None:
         next_id += 1
     save_entries(existing + new_entries)
     console.print(f"[green]✓ Imported {len(new_entries)} entries from {path.name}[/green]")
+
+
+def cmd_sync_git(args: argparse.Namespace) -> None:
+    """Import recent git commits from a repo as journal entries."""
+    from .gitimport import get_recent_commits
+
+    repo = args.path or "."
+    since = args.since or "1 day ago"
+    tag = args.tag or "commit"
+
+    commits = get_recent_commits(repo_path=repo, since=since)
+    if not commits:
+        console.print(f"[yellow]No commits found in '{repo}' since '{since}'.[/yellow]")
+        return
+
+    if args.dry_run:
+        console.print(f"[cyan]Dry run — {len(commits)} commits found:[/cyan]\n")
+        for c in commits[:20]:
+            console.print(f"  [dim]{c['date']} {c['time']}[/dim] [yellow][{tag}][/yellow] {c['subject']} [dim]({c['sha']})[/dim]")
+        if len(commits) > 20:
+            console.print(f"  [dim]... and {len(commits) - 20} more[/dim]")
+        return
+
+    existing = load_entries()
+    # Avoid duplicates by checking for entries with same sha in text
+    existing_texts = {e["text"] for e in existing}
+    new_entries = []
+    for c in commits:
+        text = f"{c['subject']} [{c['sha']}]"
+        if text in existing_texts:
+            continue
+        new_entries.append({
+            "id": 0,  # assigned below
+            "date": c["date"],
+            "time": c["time"],
+            "text": text,
+            "tag": tag,
+        })
+
+    if not new_entries:
+        console.print("[dim]No new commits to import (all already logged).[/dim]")
+        return
+
+    next_id = max((e["id"] for e in existing), default=0) + 1
+    for e in new_entries:
+        e["id"] = next_id
+        next_id += 1
+
+    save_entries(existing + new_entries)
+    console.print(f"[green]✓ Imported {len(new_entries)} commits from '{repo}' as entries (tag: [yellow]{tag}[/yellow])[/green]")
+    for e in new_entries[:10]:
+        console.print(f"  [dim]{e['date']} {e['time']}[/dim] {e['text']}")
+    if len(new_entries) > 10:
+        console.print(f"  [dim]... and {len(new_entries) - 10} more[/dim]")
+
+
+def cmd_timer(args: argparse.Namespace) -> None:
+    """Pomodoro-style timer with Rich Live countdown and auto-log on completion."""
+    import time as _time
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.align import Align
+    from rich.text import Text
+    from rich.table import Table, box as rbox
+
+    minutes = args.minutes
+    label = args.label or f"{minutes}m session"
+    tag = args.tag or _cfg.get("default_tag") or "focus"
+    total_secs = minutes * 60
+
+    POMODORO_ICONS = ["🍅", "⏱", "🔥", "⚡", "🎯"]
+    icon = POMODORO_ICONS[minutes % len(POMODORO_ICONS)]
+
+    console.print(f"\n[bold cyan]{icon} Timer started:[/bold cyan] {label} ({minutes} min)\n"
+                  f"  [dim]Press Ctrl+C to cancel and log partial session.[/dim]\n")
+
+    start = _time.monotonic()
+    elapsed = 0.0
+    cancelled = False
+
+    def _render(elapsed: float) -> Panel:
+        remaining = max(0.0, total_secs - elapsed)
+        pct = min(1.0, elapsed / total_secs)
+        mins_left = int(remaining // 60)
+        secs_left = int(remaining % 60)
+
+        BAR_WIDTH = 40
+        filled = round(pct * BAR_WIDTH)
+        bar = "[cyan]" + "█" * filled + "[/cyan]" + "[dim]" + "░" * (BAR_WIDTH - filled) + "[/dim]"
+
+        t = Table.grid(expand=True)
+        t.add_column(justify="center")
+        t.add_row(Text(f"{icon}  {label}", style="bold cyan"))
+        t.add_row(Text(""))
+        t.add_row(Text(f"{bar}  {pct:.0%}", justify="center"))
+        t.add_row(Text(""))
+        t.add_row(Text(f"{mins_left:02d}:{secs_left:02d} remaining", style="bold", justify="center"))
+        t.add_row(Text(f"elapsed {int(elapsed // 60):02d}:{int(elapsed % 60):02d}", style="dim", justify="center"))
+        return Panel(t, border_style="cyan", box=rbox.ROUNDED)
+
+    try:
+        with Live(_render(0), refresh_per_second=2, screen=False) as live:
+            while True:
+                _time.sleep(0.5)
+                elapsed = _time.monotonic() - start
+                live.update(_render(elapsed))
+                if elapsed >= total_secs:
+                    break
+    except KeyboardInterrupt:
+        elapsed = _time.monotonic() - start
+        cancelled = True
+
+    elapsed_mins = int(elapsed) // 60
+    elapsed_secs = int(elapsed) % 60
+
+    if cancelled:
+        console.print(f"\n[yellow]⊙ Timer cancelled after {elapsed_mins:02d}:{elapsed_secs:02d}.[/yellow]")
+    else:
+        console.print(f"\n[green]✓ Timer complete! {minutes} minute session finished.[/green]")
+
+    console.print(f"\n[dim]What did you work on during this session?[/dim]")
+    try:
+        note = input("  > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        note = ""
+
+    if note:
+        duration_note = f" ({elapsed_mins}m{elapsed_secs:02d}s)"
+        text = f"{note}{duration_note}"
+        entry = add_entry(text, tag=tag)
+        tag_str = f"[yellow]\\[{entry['tag']}][/yellow] " if entry.get("tag") else ""
+        console.print(
+            f"\n[green]✓[/green] Logged: {tag_str}{entry['text']} "
+            f"[dim]({entry['date']} {entry['time']})[/dim]"
+        )
+    else:
+        console.print("[dim]  (no entry logged)[/dim]")
 
 
 def cmd_tags(args: argparse.Namespace) -> None:

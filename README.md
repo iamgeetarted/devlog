@@ -1,5 +1,91 @@
 # devlog
 
+## What's New in v2.1.0
+
+### `devlog sync-git [PATH]` — Import git commits as journal entries
+
+Pull recent commits from any git repository directly into your devlog. Uses `git log` under the hood, deduplicates automatically, and tags every imported entry so you can filter them later.
+
+```bash
+devlog sync-git                              # import commits from current repo (last 24h)
+devlog sync-git ~/projects/myapp            # import from another repo
+devlog sync-git --since "7 days ago"        # look further back
+devlog sync-git --since 2026-05-01         # since a specific date
+devlog sync-git --tag feat                  # use a custom tag (default: commit)
+devlog sync-git --dry-run                   # preview without saving
+```
+
+```
+✓ Imported 5 commits from '.' as entries (tag: commit)
+  2026-05-21 10:14  fix null pointer in session handler [a1b2c3d4]
+  2026-05-21 11:30  add rate limiting to auth endpoint [e5f6a7b8]
+  2026-05-21 14:02  refactor DB connection pool [c9d0e1f2]
+```
+
+Duplicate detection is automatic — running `sync-git` twice won't create duplicate entries.
+
+---
+
+### `devlog summarize` — AI caching (no redundant API calls)
+
+`devlog summarize` now caches AI-generated summaries to disk (`~/.devlog/ai_cache.json`) with a 1-hour TTL. Re-running the command for the same day is instant and free — the cached result is returned immediately. Use `--no-cache` to force regeneration.
+
+```bash
+devlog summarize              # uses cache if available (shown with "(cached)" note)
+devlog summarize --no-cache   # bypass cache and call the API fresh
+devlog summarize 2026-05-20   # cached per-day — each date has its own cache key
+```
+
+```
+Summary for 2026-05-21
+
+Worked on stabilising the auth layer by fixing a null pointer bug and adding rate
+limiting. Spent the afternoon refactoring the DB connection pool for better
+reliability under load. Wrapped up with code review and documentation updates.
+
+  (cached — run with --no-cache to regenerate)
+```
+
+Expired entries are evicted automatically on each write to keep the cache file small.
+
+---
+
+### `devlog timer [MINUTES]` — Pomodoro timer with auto-log
+
+A full-featured Pomodoro-style countdown timer that renders a live Rich progress bar in your terminal and prompts you to log what you worked on when the session ends (or when you cancel early with Ctrl+C).
+
+```bash
+devlog timer               # 25-minute Pomodoro (default)
+devlog timer 50            # custom duration
+devlog timer 15 --label "quick bug fix" --tag bug
+devlog timer -l "writing docs"
+```
+
+```
+🍅 Timer started: 25m session (25 min)
+  Press Ctrl+C to cancel and log partial session.
+
+╭──────────────────────────────────────────────────────╮
+│              🍅  25m session                         │
+│                                                      │
+│  ████████████████░░░░░░░░░░░░░░░░░░░░░░  42%        │
+│                                                      │
+│                10:42 remaining                       │
+│               elapsed 14:18                          │
+╰──────────────────────────────────────────────────────╯
+
+✓ Timer complete! 25 minute session finished.
+
+What did you work on during this session?
+  > finished the auth refactor and wrote tests
+
+✓ Logged: [focus] finished the auth refactor and wrote tests (25m00s)  (2026-05-21 15:30)
+```
+
+The auto-logged entry includes the actual elapsed time so partial sessions are accurately recorded. The tag defaults to `focus` (or your configured `default_tag`).
+
+---
+
 ## What's New in v2.0.0
 
 ### `devlog semantic <query> [--top N]` — Semantic search with TF-IDF
