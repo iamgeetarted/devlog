@@ -879,6 +879,300 @@ def cmd_focus(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_streak(args: argparse.Namespace) -> None:
+    """Enhanced streak summary with milestones, best-ever record, and 14-day calendar."""
+    from datetime import date, timedelta
+    from rich.table import Table, box as rbox
+
+    entries = load_entries()
+    today = date.today()
+
+    # Build set of dates that have at least one entry
+    dates_with_entries: set[str] = set(e["date"] for e in entries)
+
+    # --- Current streak (consecutive days ending today) ---
+    current_streak = 0
+    d = today
+    while d.isoformat() in dates_with_entries:
+        current_streak += 1
+        d -= timedelta(days=1)
+
+    # --- Best-ever streak ---
+    best_streak = 0
+    best_start: date | None = None
+    best_end: date | None = None
+
+    if dates_with_entries:
+        sorted_dates = sorted(date.fromisoformat(s) for s in dates_with_entries)
+        run = 1
+        run_start = sorted_dates[0]
+        for i in range(1, len(sorted_dates)):
+            if sorted_dates[i] == sorted_dates[i - 1] + timedelta(days=1):
+                run += 1
+            else:
+                if run > best_streak:
+                    best_streak = run
+                    best_start = run_start
+                    best_end = sorted_dates[i - 1]
+                run = 1
+                run_start = sorted_dates[i]
+        # final run
+        if run > best_streak:
+            best_streak = run
+            best_start = run_start
+            best_end = sorted_dates[-1]
+
+    # --- Milestones ---
+    milestones = [7, 14, 30, 60, 90, 180, 365]
+    next_milestone: int | None = None
+    days_to_milestone: int | None = None
+    for m in milestones:
+        if current_streak < m:
+            next_milestone = m
+            days_to_milestone = m - current_streak
+            break
+
+    # --- Visual flame bar (last 30 days) ---
+    flame_days = 30
+    flame_parts: list[str] = []
+    for i in range(flame_days - 1, -1, -1):
+        day = (today - timedelta(days=i)).isoformat()
+        if day in dates_with_entries:
+            flame_parts.append("[bold red]🔥[/bold red]")
+        else:
+            flame_parts.append("[blue]❄️ [/blue]")
+    flame_bar = "".join(flame_parts)
+
+    # --- 14-day mini calendar ---
+    cal_days = 14
+    cal_header = ""
+    cal_marks = ""
+    for i in range(cal_days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        cal_header += f" {d.day:2d}"
+        if d.isoformat() in dates_with_entries:
+            cal_marks += "  [green]✓[/green]"
+        else:
+            cal_marks += "  [dim]·[/dim]"
+
+    # --- Output ---
+    console.print()
+    console.print(Panel(
+        f"[bold yellow]Current streak:[/bold yellow] [bold white]{current_streak}[/bold white] day{'s' if current_streak != 1 else ''}",
+        title="[bold red]Streak[/bold red]",
+        border_style="yellow",
+        box=rbox.ROUNDED,
+    ))
+
+    if best_streak > 0 and best_start and best_end:
+        period_str = f"{best_start.isoformat()} → {best_end.isoformat()}"
+        console.print(
+            f"  [bold cyan]Best ever:[/bold cyan] [bold white]{best_streak}[/bold white] days  "
+            f"[dim]({period_str})[/dim]"
+        )
+    else:
+        console.print("  [bold cyan]Best ever:[/bold cyan] [dim]no entries yet[/dim]")
+
+    if next_milestone is not None:
+        console.print(
+            f"  [bold magenta]Next milestone:[/bold magenta] {next_milestone} days  "
+            f"[dim]({days_to_milestone} day{'s' if days_to_milestone != 1 else ''} to go)[/dim]"
+        )
+    else:
+        console.print("  [bold magenta]Milestone:[/bold magenta] [green]All milestones reached![/green]")
+
+    console.print()
+    console.print(f"  [bold]Last {flame_days} days:[/bold]  {flame_bar}")
+
+    console.print()
+    console.print(f"  [bold]Last {cal_days} days:[/bold]")
+    console.print(f"  [dim]{cal_header}[/dim]")
+    console.print(f" {cal_marks}")
+    console.print()
+
+
+def cmd_note(args: argparse.Namespace) -> None:
+    """Long-form notes — add, list, view, delete."""
+    from .notes import add_note, list_notes, get_note, delete_note
+    from rich.table import Table, box as rbox
+    from rich.markdown import Markdown
+
+    subcmd = getattr(args, "note_cmd", None)
+
+    if subcmd == "add":
+        title = args.title
+        body = args.body if args.body else ""
+        tag = getattr(args, "tag", None)
+        note = add_note(title, body, tag)
+        tag_str = f"  [yellow][{note['tag']}][/yellow]" if note.get("tag") else ""
+        console.print(f"[green]✓ Note #{note['id']} saved:[/green] {note['title']}{tag_str}  [dim]({note['date']} {note['time']})[/dim]")
+
+    elif subcmd == "list":
+        tag_filter = getattr(args, "tag", None)
+        limit = getattr(args, "limit", None)
+        notes = list_notes(tag=tag_filter, limit=limit)
+        if not notes:
+            console.print("[dim]No notes found. Add one with: devlog note add --title '...' --body '...'[/dim]")
+            return
+        t = Table(box=rbox.ROUNDED, show_header=True, header_style="bold cyan", border_style="dim")
+        t.add_column("ID", style="dim", justify="right", no_wrap=True)
+        t.add_column("Date", style="dim", no_wrap=True)
+        t.add_column("Tag", style="yellow", no_wrap=True)
+        t.add_column("Title", style="white")
+        t.add_column("Preview", style="dim")
+        for n in notes:
+            preview = (n["body"][:60] + "…") if len(n["body"]) > 60 else n["body"]
+            preview = preview.replace("\n", " ")
+            t.add_row(str(n["id"]), n["date"], n.get("tag") or "", n["title"], preview)
+        title_str = "Notes"
+        if tag_filter:
+            title_str += f" [{tag_filter}]"
+        console.print(Panel(t, title=title_str, border_style="cyan", box=rbox.ROUNDED))
+
+    elif subcmd == "view":
+        note = get_note(args.id)
+        if note is None:
+            console.print(f"[red]Note #{args.id} not found.[/red]")
+            return
+        tag_str = f"  [yellow][{note['tag']}][/yellow]" if note.get("tag") else ""
+        header = f"[bold]{note['title']}[/bold]{tag_str}  [dim]#{note['id']} · {note['date']} {note['time']}[/dim]"
+        body_md = Markdown(note["body"]) if note["body"] else "[dim](no body)[/dim]"
+        console.print(Panel(body_md, title=header, border_style="cyan", box=rbox.ROUNDED))
+
+    elif subcmd == "delete":
+        ok = delete_note(args.id)
+        if ok:
+            console.print(f"[green]✓ Note #{args.id} deleted.[/green]")
+        else:
+            console.print(f"[red]Note #{args.id} not found.[/red]")
+
+    else:
+        console.print("[dim]Usage: devlog note add|list|view|delete[/dim]")
+        console.print("[dim]  devlog note add --title 'My note' --body 'Details...' [--tag TAG][/dim]")
+        console.print("[dim]  devlog note list [--tag TAG] [--limit N][/dim]")
+        console.print("[dim]  devlog note view ID[/dim]")
+        console.print("[dim]  devlog note delete ID[/dim]")
+
+
+def cmd_digest(args: argparse.Namespace) -> None:
+    """AI-powered standup digest for Slack/email/standup."""
+    from datetime import date, timedelta
+
+    period = getattr(args, "period", "day")
+    fmt = getattr(args, "format", "slack")
+    no_cache = getattr(args, "no_cache", False)
+
+    today = date.today()
+    if period == "week":
+        # ISO week: Monday to today
+        week_start = today - timedelta(days=today.weekday())
+        since = week_start.isoformat()
+        period_label = f"week of {week_start.isoformat()}"
+    else:
+        since = today.isoformat()
+        period_label = f"{today.isoformat()}"
+
+    entries = get_entries(since=since, until=today.isoformat())
+
+    if not entries:
+        console.print(f"[yellow]No entries found for {period_label}.[/yellow]")
+        return
+
+    if fmt == "plain":
+        console.print(f"\n[bold]Digest — {period_label}[/bold]\n")
+        for e in entries:
+            tag_str = f"[{e['tag']}] " if e.get("tag") else ""
+            console.print(f"  • {tag_str}{e['text']}")
+        console.print()
+        return
+
+    # AI formats: slack or markdown
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]ANTHROPIC_API_KEY not set. Use --format plain or set the key.[/red]")
+        return
+
+    # Cache support
+    import json as _json
+    from pathlib import Path
+    from .storage import DATA_DIR
+
+    cache_file = DATA_DIR / "ai_cache.json"
+    cache_key = f"digest:{period}:{since}:{fmt}"
+
+    if not no_cache and cache_file.exists():
+        try:
+            cache = _json.loads(cache_file.read_text())
+            entry_cache = cache.get(cache_key)
+            if entry_cache:
+                import time as _time
+                if _time.time() - entry_cache.get("ts", 0) < 3600:
+                    console.print(f"\n[bold]Digest — {period_label}[/bold]\n")
+                    console.print(entry_cache["text"])
+                    console.print("\n  [dim](cached — run with --no-cache to regenerate)[/dim]")
+                    return
+        except Exception:
+            pass
+
+    entry_lines = "\n".join(
+        f"- [{e['date']} {e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+        for e in entries
+    )
+
+    if fmt == "slack":
+        format_instruction = "Format for Slack: use bold (*text*) for section headers, bullet points with •, and emoji to make it scannable. Keep it under 8 bullets."
+    else:
+        format_instruction = "Format as Markdown: use ## headers, bullet points with -, and emoji. Keep it under 8 bullets."
+
+    prompt = (
+        f"Generate a concise standup/digest based on these devlog entries:\n\n"
+        f"{entry_lines}\n\n"
+        f"Instructions: {format_instruction} "
+        f"Lead with what was accomplished, then any blockers (if apparent), then plans or next steps. "
+        f"Be direct and professional. Period covered: {period_label}."
+    )
+
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    console.print(f"\n[bold]Digest — {period_label}[/bold]\n")
+
+    output_parts: list[str] = []
+    try:
+        with client.messages.stream(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            for text in stream.text_stream:
+                print(text, end="", flush=True)
+                output_parts.append(text)
+    except Exception as e:
+        console.print(f"\n[red]AI request failed: {e}[/red]")
+        return
+
+    print()
+
+    # Save to cache
+    full_text = "".join(output_parts)
+    try:
+        import time as _time
+        cache: dict = {}
+        if cache_file.exists():
+            try:
+                cache = _json.loads(cache_file.read_text())
+            except Exception:
+                cache = {}
+        cache[cache_key] = {"text": full_text, "ts": _time.time()}
+        # Evict entries older than 1 hour
+        now_ts = _time.time()
+        cache = {k: v for k, v in cache.items() if now_ts - v.get("ts", 0) < 3600}
+        cache[cache_key] = {"text": full_text, "ts": now_ts}
+        cache_file.write_text(_json.dumps(cache, indent=2))
+    except Exception:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="devlog",
@@ -1064,6 +1358,46 @@ def main():
     pt_rename.add_argument("old_tag", help="Existing tag name")
     pt_rename.add_argument("new_tag", help="New tag name")
     p_tags.set_defaults(func=cmd_tags)
+
+    p_streak = sub.add_parser("streak", help="Streak summary with milestones and best-ever record")
+    p_streak.set_defaults(func=cmd_streak)
+
+    # note subcommand
+    p_note = sub.add_parser("note", help="Manage long-form notes with title, body, and optional tag")
+    note_sub = p_note.add_subparsers(dest="note_cmd")
+
+    pn_add = note_sub.add_parser("add", help="Add a new note")
+    pn_add.add_argument("--title", "-T", required=True, help="Note title")
+    pn_add.add_argument("--body", "-b", default="", help="Note body (supports Markdown)")
+    pn_add.add_argument("--tag", "-t", help="Optional tag")
+
+    pn_list = note_sub.add_parser("list", help="List notes")
+    pn_list.add_argument("--tag", "-t", help="Filter by tag")
+    pn_list.add_argument("--limit", "-n", type=int, metavar="N", help="Maximum number of notes to show")
+
+    pn_view = note_sub.add_parser("view", help="View a note by ID")
+    pn_view.add_argument("id", type=int, help="Note ID")
+
+    pn_del = note_sub.add_parser("delete", help="Delete a note by ID")
+    pn_del.add_argument("id", type=int, help="Note ID")
+
+    p_note.set_defaults(func=cmd_note)
+
+    p_digest = sub.add_parser("digest", help="AI-powered standup digest for Slack/email/standup")
+    p_digest.add_argument(
+        "--period", choices=["day", "week"], default="day",
+        help="Time period to cover (default: day)",
+    )
+    p_digest.add_argument(
+        "--format", "-f", choices=["slack", "markdown", "plain"], default="slack",
+        dest="format",
+        help="Output format (default: slack). 'plain' requires no API key.",
+    )
+    p_digest.add_argument(
+        "--no-cache", action="store_true",
+        help="Bypass cache and regenerate from AI",
+    )
+    p_digest.set_defaults(func=cmd_digest)
 
     args = parser.parse_args()
     if not args.command:

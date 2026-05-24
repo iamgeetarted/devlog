@@ -1,5 +1,89 @@
 # devlog
 
+## What's New in v2.2.0
+
+### `devlog streak` — Streak milestones, best-ever record, and 14-day calendar
+
+Enhanced streak tracking that goes beyond a simple count. Shows your current streak, your all-time best streak and when it occurred, days until the next milestone, a 30-day visual flame bar, and a compact 14-day calendar.
+
+```bash
+devlog streak
+```
+
+```
+╭─ Streak ───────────────────────────────╮
+│  Current streak: 5 days                │
+╰────────────────────────────────────────╯
+  Best ever: 14 days  (2026-04-07 → 2026-04-20)
+  Next milestone: 7 days  (2 days to go)
+
+  Last 30 days:  🔥🔥🔥❄️ 🔥🔥🔥🔥🔥❄️ ❄️ 🔥...
+
+  Last 14 days:
+     11 12 13 14 15 16 17 18 19 20 21 22 23 24
+      ·  ✓  ✓  ✓  ·  ·  ✓  ✓  ✓  ✓  ✓  ·  ·  ✓
+```
+
+Milestones tracked: 7, 14, 30, 60, 90, 180, and 365 days.
+
+---
+
+### `devlog note` — Long-form notes with title, body, and tag
+
+Write and manage long-form notes alongside your daily entries. Supports Markdown bodies, optional tags, and persistent storage in `~/.devlog_notes.json`.
+
+```bash
+# Add a note
+devlog note add --title "Architecture decision: switch to async" --body "We decided to..." --tag arch
+
+# List notes (optionally filter by tag)
+devlog note list
+devlog note list --tag arch --limit 5
+
+# View a note (body rendered as Markdown)
+devlog note view 1
+
+# Delete a note
+devlog note delete 1
+```
+
+```
+╭─ Notes ───────────────────────────────────────────────────────────────────╮
+│ ID  Date        Tag   Title                           Preview              │
+│  2  2026-05-24  arch  Architecture decision: …        We decided to sw…   │
+│  1  2026-05-23        Sprint retro notes              Good velocity thi…  │
+╰───────────────────────────────────────────────────────────────────────────╯
+```
+
+---
+
+### `devlog digest` — AI standup digest for Slack, Markdown, or plain text
+
+Generate a concise, ready-to-paste standup digest from your devlog entries. Covers today or the current week. AI formats (slack/markdown) use Claude Haiku; plain format needs no API key.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+
+devlog digest                        # today's entries, Slack format (default)
+devlog digest --period week          # this week's entries
+devlog digest --format markdown      # Markdown bullets instead of Slack bold
+devlog digest --format plain         # no AI — plain bullet list, no API key needed
+devlog digest --no-cache             # bypass cache and regenerate
+```
+
+```
+Digest — 2026-05-24
+
+• *Accomplished:* Fixed race condition in the job queue (#142) and merged auth PR
+• Refactored DB connection pool — reduced connection overhead by ~30%
+• Deployed v2.2.0 to staging; smoke tests passing
+• *Next:* Write integration tests for the new async worker
+```
+
+Results are cached for 1 hour per period/format combination. Use `--no-cache` to force regeneration.
+
+---
+
 ## What's New in v2.1.0
 
 ### `devlog sync-git [PATH]` — Import git commits as journal entries
