@@ -1399,6 +1399,47 @@ def main():
     )
     p_digest.set_defaults(func=cmd_digest)
 
+    # habit subcommand
+    p_habit = sub.add_parser("habit", help="Daily habit tracker with streaks and Rich status view")
+    habit_sub = p_habit.add_subparsers(dest="habit_cmd")
+
+    ph_add = habit_sub.add_parser("add", help="Add a new habit to track")
+    ph_add.add_argument("name", help="Habit name (e.g. 'exercise', 'read 30min')")
+
+    ph_del = habit_sub.add_parser("delete", help="Remove a habit by ID")
+    ph_del.add_argument("id", type=int, help="Habit ID")
+
+    ph_check = habit_sub.add_parser("check", help="Mark a habit done for today")
+    ph_check.add_argument("id", type=int, help="Habit ID")
+    ph_check.add_argument("--date", metavar="YYYY-MM-DD", help="Override date (default: today)")
+    ph_check.add_argument("--note", default="", help="Optional note for this check-in")
+
+    ph_uncheck = habit_sub.add_parser("uncheck", help="Remove today's check-in for a habit")
+    ph_uncheck.add_argument("id", type=int, help="Habit ID")
+    ph_uncheck.add_argument("--date", metavar="YYYY-MM-DD", help="Override date (default: today)")
+
+    ph_status = habit_sub.add_parser("status", help="Show habit streaks and recent history")
+    ph_status.add_argument("--days", type=int, default=14, metavar="N",
+                           help="Days of history to show (default: 14)")
+
+    p_habit.set_defaults(func=cmd_habit)
+
+    # metrics subcommand
+    p_metrics = sub.add_parser("metrics", help="Cross-dimensional productivity metrics with AI analysis")
+    p_metrics.add_argument("--days", type=int, default=30, metavar="N",
+                           help="Analysis window in days (default: 30)")
+    p_metrics.add_argument("--ai", action="store_true",
+                           help="Stream an AI interpretation of the metrics (requires ANTHROPIC_API_KEY)")
+    p_metrics.set_defaults(func=cmd_metrics)
+
+    # standout subcommand
+    p_standout = sub.add_parser("standout", help="Identify your most significant entries via TF-IDF outlier scoring")
+    p_standout.add_argument("--days", type=int, default=90, metavar="N",
+                            help="Analysis window in days (default: 90)")
+    p_standout.add_argument("--top", type=int, default=10, metavar="N",
+                            help="Number of standout entries to show (default: 10)")
+    p_standout.set_defaults(func=cmd_standout)
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -2068,3 +2109,271 @@ def cmd_tags(args: argparse.Namespace) -> None:
 
     else:
         console.print("[dim]Usage: devlog tags list | devlog tags rename OLD NEW[/dim]")
+
+
+def cmd_habit(args: argparse.Namespace) -> None:
+    """Manage daily habits: track streaks and view history."""
+    from .habits import add_habit, delete_habit, check_habit, uncheck_habit, get_status
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from rich.text import Text
+
+    subcmd = getattr(args, "habit_cmd", None)
+
+    if subcmd == "add":
+        try:
+            habit = add_habit(args.name)
+        except ValueError as e:
+            console.print(f"[red]✗ {e}[/red]")
+            return
+        console.print(f"[green]✓[/green] Habit [cyan]#{habit['id']}[/cyan] added: {habit['name']}")
+
+    elif subcmd == "delete":
+        from .habits import delete_habit
+        if delete_habit(args.id):
+            console.print(f"[green]✓ Habit #{args.id} deleted.[/green]")
+        else:
+            console.print(f"[red]✗ Habit #{args.id} not found.[/red]")
+
+    elif subcmd == "check":
+        if check_habit(args.id, day=getattr(args, "date", None), note=args.note):
+            console.print(f"[green]✓ Habit #{args.id} checked for {getattr(args, 'date', None) or 'today'}[/green]")
+        else:
+            console.print(f"[red]✗ Habit #{args.id} not found.[/red]")
+
+    elif subcmd == "uncheck":
+        from .habits import uncheck_habit
+        day = getattr(args, "date", None)
+        if uncheck_habit(args.id, day=day):
+            console.print(f"[green]✓ Check-in removed for habit #{args.id}[/green]")
+        else:
+            console.print(f"[yellow]No check-in found for habit #{args.id} on {day or 'today'}.[/yellow]")
+
+    elif subcmd == "status" or subcmd is None:
+        days = getattr(args, "days", 14)
+        statuses = get_status(days=days)
+
+        if not statuses:
+            console.print(
+                "[dim]No habits yet. Add one with:[/dim]\n"
+                "  [cyan]devlog habit add \"your habit\"[/cyan]"
+            )
+            return
+
+        t = Table(
+            box=rbox.ROUNDED, show_header=True, header_style="bold cyan",
+            border_style="dim", expand=False,
+        )
+        t.add_column("ID", style="dim", justify="right", width=4)
+        t.add_column("Habit", style="white")
+        t.add_column("Streak", justify="right", style="bold yellow", width=7)
+        t.add_column("%", justify="right", style="cyan", width=5)
+        t.add_column(f"Last {days} days →", style="dim")
+
+        DONE = "[green]■[/green]"
+        MISS = "[dim]·[/dim]"
+
+        for s in statuses:
+            bar = "".join(DONE if h else MISS for h in s["history"])
+            streak_str = f"{s['streak']}d" if s["streak"] else "—"
+            t.add_row(str(s["id"]), s["name"], streak_str, f"{s['rate']}%", bar)
+
+        console.print(Panel(t, title=f"Habits — last {days} days", border_style="cyan", box=rbox.ROUNDED))
+        console.print(
+            f"  [dim]Legend: [green]■[/green] done  · missed  "
+            f"·  devlog habit check ID  to log today's completion[/dim]"
+        )
+
+    else:
+        console.print("[dim]Usage: devlog habit add|delete|check|uncheck|status[/dim]")
+
+
+def cmd_metrics(args: argparse.Namespace) -> None:
+    """Show cross-dimensional productivity metrics and optionally stream AI interpretation."""
+    from .metrics import compute_metrics
+    from .storage import load_entries
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+
+    days = args.days
+    entries = load_entries()
+    m = compute_metrics(entries, days=days)
+
+    if not m["total_entries"]:
+        console.print(f"[dim]No entries in the last {days} days.[/dim]")
+        return
+
+    # Summary table
+    t = Table(box=rbox.SIMPLE, show_header=False, pad_edge=False)
+    t.add_column("Metric", style="cyan")
+    t.add_column("Value", style="white", justify="right")
+
+    t.add_row("Total entries", str(m["total_entries"]))
+    t.add_row("Active days", f"{m['active_days']} / {days}")
+    t.add_row("Velocity", f"{m['velocity']:.2f} entries/day")
+    t.add_row("Trend", m["velocity_trend"])
+    if m["peak_hour"] is not None:
+        t.add_row("Peak hour", f"{m['peak_hour']:02d}:00")
+    if m["busiest_weekday"]:
+        t.add_row("Busiest weekday", m["busiest_weekday"])
+    if m["avg_mood"] is not None:
+        t.add_row("Avg mood", f"{m['avg_mood']:.1f}/5")
+    if m["mood_variance"] is not None:
+        t.add_row("Mood variance", f"±{m['mood_variance']:.2f}")
+
+    console.print(Panel(t, title=f"Productivity Metrics — last {days} days", border_style="cyan", box=rbox.ROUNDED))
+
+    # Tag table
+    if m["top_tags"]:
+        tg = Table(box=rbox.SIMPLE, show_header=True, header_style="bold yellow", pad_edge=False)
+        tg.add_column("Tag", style="yellow")
+        tg.add_column("n", justify="right", width=5)
+        tg.add_column("Avg mood", justify="right", width=9)
+        for tag, count in m["top_tags"]:
+            mood_str = f"{m['tag_moods'][tag]:.1f}" if tag in m["tag_moods"] else "—"
+            tg.add_row(tag, str(count), mood_str)
+        console.print(Panel(tg, title="Top tags", border_style="yellow", box=rbox.ROUNDED))
+
+    if m["best_mood_tag"]:
+        console.print(
+            f"\n  [bold cyan]Happiest tag:[/bold cyan] [yellow]{m['best_mood_tag']}[/yellow] "
+            f"[dim](avg mood {m['tag_moods'][m['best_mood_tag']]:.1f}/5)[/dim]"
+        )
+    if m["worst_mood_tag"] and m["worst_mood_tag"] != m["best_mood_tag"]:
+        console.print(
+            f"  [bold cyan]Hardest tag:[/bold cyan]  [yellow]{m['worst_mood_tag']}[/yellow] "
+            f"[dim](avg mood {m['tag_moods'][m['worst_mood_tag']]:.1f}/5)[/dim]"
+        )
+
+    if getattr(args, "ai", False):
+        _cmd_metrics_ai(m, days)
+
+
+def _cmd_metrics_ai(m: dict, days: int) -> None:
+    """Stream an AI interpretation of the productivity metrics."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+
+    metric_text = (
+        f"Analysis window: {days} days\n"
+        f"Total entries: {m['total_entries']}\n"
+        f"Active days: {m['active_days']} / {days}\n"
+        f"Velocity: {m['velocity']:.2f} entries/day ({m['velocity_trend']} trend)\n"
+        f"Peak hour: {m['peak_hour']:02d}:00\n" if m["peak_hour"] is not None else ""
+        f"Busiest weekday: {m['busiest_weekday']}\n" if m["busiest_weekday"] else ""
+        f"Average mood: {m['avg_mood']}/5\n" if m["avg_mood"] else ""
+        f"Top tags: {', '.join(f\"{t}({n})\" for t, n in m['top_tags'])}\n"
+        f"Tag mood correlation: {m['tag_moods']}\n" if m["tag_moods"] else ""
+        f"Happiest tag: {m['best_mood_tag']}\n" if m["best_mood_tag"] else ""
+        f"Hardest tag: {m['worst_mood_tag']}\n" if m["worst_mood_tag"] else ""
+    )
+
+    prompt = (
+        f"Here are productivity metrics from my developer journal for the past {days} days:\n\n"
+        f"{metric_text}\n"
+        "Provide a concise developer-focused analysis (4-5 sentences):\n"
+        "1. What do these patterns say about my work rhythm?\n"
+        "2. Any correlation between mood and work type worth noting?\n"
+        "3. One specific, actionable improvement suggestion.\n\n"
+        "Be concrete and practical. Use markdown formatting."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    console.print(f"\n[bold cyan]AI Metrics Interpretation[/bold cyan]\n")
+    with client.messages.stream(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print("\n")
+
+
+def cmd_standout(args: argparse.Namespace) -> None:
+    """Find your most significant entries via TF-IDF outlier scoring."""
+    from datetime import date, timedelta
+    from collections import Counter
+    import math
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from .storage import load_entries
+
+    days = args.days
+    top_n = args.top
+    today = date.today()
+    cutoff = (today - timedelta(days=days)).isoformat()
+    window = [e for e in load_entries() if e.get("date", "") >= cutoff]
+
+    if not window:
+        console.print(f"[dim]No entries in the last {days} days.[/dim]")
+        return
+
+    def _tokenize(text: str) -> list[str]:
+        import re
+        return re.findall(r"[a-z]+", text.lower())
+
+    # Build corpus
+    docs = [_tokenize(e["text"]) for e in window]
+    n_docs = len(docs)
+
+    # Term frequency per document
+    tf_list = [Counter(doc) for doc in docs]
+
+    # Inverse document frequency across corpus
+    df: Counter = Counter()
+    for doc in docs:
+        for term in set(doc):
+            df[term] += 1
+    idf = {term: math.log((n_docs + 1) / (count + 1)) + 1 for term, count in df.items()}
+
+    # TF-IDF score for each entry = sum of top-3 word scores
+    scored = []
+    for i, (entry, tf) in enumerate(zip(window, tf_list)):
+        if not tf:
+            scored.append((0.0, entry))
+            continue
+        word_scores = sorted(
+            (tf[term] * idf.get(term, 0) for term in tf),
+            reverse=True,
+        )
+        score = sum(word_scores[:3])
+        scored.append((score, entry))
+
+    scored.sort(key=lambda x: -x[0])
+    top = scored[:top_n]
+
+    t = Table(
+        box=rbox.ROUNDED, show_header=True, header_style="bold cyan",
+        border_style="dim", expand=False,
+    )
+    t.add_column("Score", justify="right", style="cyan", width=7)
+    t.add_column("Date", style="dim", width=12)
+    t.add_column("Tag", style="yellow", width=10)
+    t.add_column("Entry", style="white")
+
+    for score, entry in top:
+        t.add_row(
+            f"{score:.2f}",
+            entry["date"],
+            entry.get("tag") or "",
+            entry["text"],
+        )
+
+    console.print(Panel(
+        t,
+        title=f"Standout entries — last {days} days (TF-IDF outliers)",
+        border_style="cyan",
+        box=rbox.ROUNDED,
+    ))
+    console.print(
+        f"\n  [dim]Scoring: entries with rare, repeated keywords score highest  "
+        f"·  {len(window)} entries analysed[/dim]"
+    )

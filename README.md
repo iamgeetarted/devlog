@@ -1,5 +1,86 @@
 # devlog
 
+## What's New in v2.3.0
+
+### `devlog habit` — Daily habit tracker with streaks and Rich history view
+
+Track daily habits alongside your journal. Each habit gets its own streak counter and a visual ■/· history grid showing the last N days at a glance.
+
+```bash
+devlog habit add "exercise"
+devlog habit add "read 30min"
+devlog habit check 1              # mark habit #1 done today
+devlog habit status               # show all habits
+devlog habit status --days 21     # show 21-day history
+devlog habit uncheck 1            # undo today's check-in
+devlog habit delete 2             # remove a habit
+```
+
+```
+╭─ Habits — last 14 days ──────────────────────────────────────────╮
+│  ID  Habit          Streak    %   Last 14 days →                 │
+│   1  exercise          5d   64%   ■·■■■·■■■·■·■■                │
+│   2  read 30min        2d   50%   ·■·■■·■·■·■·■■                │
+╰──────────────────────────────────────────────────────────────────╯
+  Legend: ■ done  · missed  ·  devlog habit check ID  to log today
+```
+
+---
+
+### `devlog metrics` — Cross-dimensional productivity metrics with AI analysis
+
+Computes velocity, mood-tag correlations, peak hour, and busiest weekday across your log history. Pass `--ai` to stream an AI interpretation of your patterns.
+
+```bash
+devlog metrics                  # last 30 days
+devlog metrics --days 60        # longer window
+devlog metrics --days 30 --ai   # AI interpretation (needs ANTHROPIC_API_KEY)
+```
+
+```
+╭─ Productivity Metrics — last 30 days ─────╮
+│  Total entries       47                   │
+│  Active days         18 / 30              │
+│  Velocity            1.57 entries/day     │
+│  Trend               improving            │
+│  Peak hour           10:00                │
+│  Busiest weekday     Tue                  │
+│  Avg mood            3.8/5                │
+╰───────────────────────────────────────────╯
+╭─ Top tags ──────────────────────────────────╮
+│  Tag       n   Avg mood                     │
+│  feat     18      4.2                       │
+│  bug       9      2.9                       │
+│  review    7      3.5                       │
+╰─────────────────────────────────────────────╯
+  Happiest tag: feat (avg mood 4.2/5)
+  Hardest tag:  bug  (avg mood 2.9/5)
+```
+
+---
+
+### `devlog standout` — Identify your most significant entries via TF-IDF outlier scoring
+
+Uses TF-IDF to surface entries with unusually rare or distinctive language — your most notable moments, decisions, and discoveries — without needing an AI API key.
+
+```bash
+devlog standout                # top 10 in last 90 days
+devlog standout --top 5        # top 5
+devlog standout --days 180     # wider window
+```
+
+```
+╭─ Standout entries — last 90 days (TF-IDF outliers) ─────────────────╮
+│  Score  Date          Tag       Entry                               │
+│   8.41  2026-05-15    feat      migrated auth to PKCE flow in...   │
+│   7.92  2026-04-28    deploy    zero-downtime blue-green deploy...  │
+│   7.34  2026-04-10    research  investigated CRDT approaches for... │
+╰──────────────────────────────────────────────────────────────────────╯
+  Scoring: entries with rare, repeated keywords score highest  ·  312 entries analysed
+```
+
+---
+
 ## What's New in v2.2.0
 
 ### `devlog streak` — Streak milestones, best-ever record, and 14-day calendar
