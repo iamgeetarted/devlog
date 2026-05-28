@@ -1440,6 +1440,26 @@ def main():
                             help="Number of standout entries to show (default: 10)")
     p_standout.set_defaults(func=cmd_standout)
 
+    # pin subcommand
+    p_pin = sub.add_parser("pin", help="Pin/unpin important entries for quick reference")
+    pin_sub = p_pin.add_subparsers(dest="pin_cmd")
+    pp_add = pin_sub.add_parser("add", help="Pin an entry by ID")
+    pp_add.add_argument("id", type=int, help="Entry ID to pin")
+    pp_remove = pin_sub.add_parser("remove", help="Unpin an entry by ID")
+    pp_remove.add_argument("id", type=int, help="Entry ID to unpin")
+    pin_sub.add_parser("list", help="Show all pinned entries (default)")
+    p_pin.set_defaults(func=cmd_pin)
+
+    # correlate subcommand
+    p_corr = sub.add_parser("correlate", help="Show mood vs tag correlation table")
+    p_corr.add_argument("--days", type=int, default=90, metavar="N",
+                        help="Analysis window in days (default: 90)")
+    p_corr.set_defaults(func=cmd_correlate)
+
+    # ai-plan subcommand
+    p_plan = sub.add_parser("ai-plan", help="AI-generated daily plan for tomorrow (requires ANTHROPIC_API_KEY)")
+    p_plan.set_defaults(func=cmd_ai_plan)
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -2377,3 +2397,221 @@ def cmd_standout(args: argparse.Namespace) -> None:
         f"\n  [dim]Scoring: entries with rare, repeated keywords score highest  "
         f"·  {len(window)} entries analysed[/dim]"
     )
+
+
+def cmd_pin(args: argparse.Namespace) -> None:
+    """Pin, unpin, and list pinned entries."""
+    from .pins import pin_entry, unpin_entry, get_pinned_ids
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+
+    subcmd = getattr(args, "pin_cmd", None)
+
+    if subcmd == "add":
+        if pin_entry(args.id):
+            console.print(f"[green]✓ Entry #{args.id} pinned.[/green]")
+        else:
+            console.print(f"[yellow]Entry #{args.id} is already pinned.[/yellow]")
+
+    elif subcmd == "remove":
+        if unpin_entry(args.id):
+            console.print(f"[green]✓ Entry #{args.id} unpinned.[/green]")
+        else:
+            console.print(f"[red]Entry #{args.id} is not pinned.[/red]")
+
+    else:  # list (default)
+        ids = get_pinned_ids()
+        if not ids:
+            console.print("[dim]No pinned entries. Pin one with: devlog pin add ID[/dim]")
+            return
+
+        all_entries = load_entries()
+        by_id = {e["id"]: e for e in all_entries}
+        pinned = [by_id[i] for i in ids if i in by_id]
+
+        if not pinned:
+            console.print("[dim]No pinned entries found (they may have been deleted).[/dim]")
+            return
+
+        t = Table(box=rbox.ROUNDED, show_header=True, header_style="bold cyan", border_style="yellow")
+        t.add_column("ID", style="dim", justify="right", no_wrap=True)
+        t.add_column("Date", style="dim", no_wrap=True)
+        t.add_column("Tag", style="yellow", no_wrap=True)
+        t.add_column("Entry", style="white")
+        for e in pinned:
+            t.add_row(str(e["id"]), e["date"], e.get("tag") or "", e["text"])
+        console.print(Panel(t, title=f"[bold yellow]Pinboard[/bold yellow] ({len(pinned)} entries)", border_style="yellow", box=rbox.ROUNDED))
+
+
+def cmd_correlate(args: argparse.Namespace) -> None:
+    """Show correlations between tags and mood scores."""
+    from collections import defaultdict
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from rich.text import Text
+    from datetime import date, timedelta
+
+    days = getattr(args, "days", 90)
+    today = date.today()
+    cutoff = (today - timedelta(days=days)).isoformat()
+
+    all_entries = load_entries()
+    window = [e for e in all_entries if e.get("date", "") >= cutoff]
+
+    if not window:
+        console.print(f"[dim]No entries in the last {days} days.[/dim]")
+        return
+
+    # Gather per-tag mood stats
+    tag_moods: dict[str, list[int]] = defaultdict(list)
+    untagged_moods: list[int] = []
+    total_with_mood = 0
+
+    for e in window:
+        mood = e.get("mood")
+        if mood is not None:
+            total_with_mood += 1
+            tag = e.get("tag")
+            if tag:
+                tag_moods[tag].append(mood)
+            else:
+                untagged_moods.append(mood)
+
+    if not tag_moods and not untagged_moods:
+        console.print(
+            f"[dim]No mood data in the last {days} days. "
+            "Add moods with: devlog add -m 4 \"your entry\"[/dim]"
+        )
+        return
+
+    overall_avg = (
+        sum(m for moods in tag_moods.values() for m in moods) + sum(untagged_moods)
+    ) / total_with_mood if total_with_mood else 0
+
+    rows = []
+    for tag, moods in tag_moods.items():
+        avg = sum(moods) / len(moods)
+        delta = avg - overall_avg
+        rows.append((tag, avg, delta, len(moods)))
+
+    # Sort by average mood descending
+    rows.sort(key=lambda x: -x[1])
+
+    t = Table(box=rbox.ROUNDED, show_header=True, header_style="bold cyan", border_style="dim")
+    t.add_column("Tag", style="yellow")
+    t.add_column("Entries", justify="right", style="dim", width=8)
+    t.add_column("Avg mood", justify="right", width=9)
+    t.add_column("vs. avg", justify="right", width=9)
+    t.add_column("Distribution", width=20)
+
+    MOOD_BLOCKS = {1: "[red]▓[/red]", 2: "[yellow]▓[/yellow]", 3: "[dim]▓[/dim]", 4: "[cyan]▓[/cyan]", 5: "[green]▓[/green]"}
+
+    for tag, avg, delta, count in rows:
+        delta_str = f"[green]+{delta:.1f}[/green]" if delta > 0.1 else (
+            f"[red]{delta:.1f}[/red]" if delta < -0.1 else f"[dim]{delta:.1f}[/dim]"
+        )
+        lvl = max(1, min(5, round(avg)))
+        bar = MOOD_BLOCKS[lvl] * max(1, round(avg * 3))
+        t.add_row(tag, str(count), f"{avg:.1f}", delta_str, bar)
+
+    if untagged_moods:
+        avg = sum(untagged_moods) / len(untagged_moods)
+        delta = avg - overall_avg
+        delta_str = f"[green]+{delta:.1f}[/green]" if delta > 0.1 else (
+            f"[red]{delta:.1f}[/red]" if delta < -0.1 else f"[dim]{delta:.1f}[/dim]"
+        )
+        lvl = max(1, min(5, round(avg)))
+        bar = MOOD_BLOCKS[lvl] * max(1, round(avg * 3))
+        t.add_row("[dim](untagged)[/dim]", str(len(untagged_moods)), f"{avg:.1f}", delta_str, bar)
+
+    console.print(Panel(
+        t,
+        title=f"[bold]Mood × Tag Correlation[/bold] — last {days} days",
+        border_style="cyan",
+        box=rbox.ROUNDED,
+    ))
+
+    if rows:
+        best_tag, best_avg, *_ = rows[0]
+        worst_tag, worst_avg, *_ = rows[-1]
+        console.print(
+            f"\n  [bold cyan]Overall avg mood:[/bold cyan] {overall_avg:.1f}/5  "
+            f"[dim]·[/dim]  [dim]{total_with_mood} entries with mood data[/dim]"
+        )
+        if len(rows) > 1:
+            console.print(
+                f"  [bold green]Happiest tag:[/bold green] [yellow]{best_tag}[/yellow] [dim](avg {best_avg:.1f}/5)[/dim]  "
+                f"[dim]·[/dim]  "
+                f"[bold red]Hardest tag:[/bold red] [yellow]{worst_tag}[/yellow] [dim](avg {worst_avg:.1f}/5)[/dim]"
+            )
+
+
+def cmd_ai_plan(args: argparse.Namespace) -> None:
+    """Stream an AI-generated daily plan for tomorrow based on recent context."""
+    from datetime import date, timedelta
+
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+
+    # Gather recent context: today's entries + open goals
+    today_entries = get_entries(day=today.isoformat())
+    yesterday_entries = get_entries(day=(today - timedelta(days=1)).isoformat())
+
+    try:
+        from .goals import list_goals
+        iso = today.isocalendar()
+        week_label = f"{iso[0]}-W{iso[1]:02d}"
+        open_goals = [g for g in list_goals(week=week_label) if not g["done"]]
+    except Exception:
+        open_goals = []
+
+    if not today_entries and not yesterday_entries:
+        console.print("[yellow]No recent journal entries to base a plan on.[/yellow]")
+        console.print("[dim]Add some with: devlog add \"what you worked on today\"[/dim]")
+        return
+
+    def _fmt(entries: list[dict]) -> str:
+        return "\n".join(
+            f"- [{e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+            for e in entries
+        ) or "(none)"
+
+    goals_text = "\n".join(f"- #{g['id']}: {g['text']}" for g in open_goals) or "(none)"
+
+    prompt = (
+        f"You are a thoughtful engineering coach.\n\n"
+        f"Today's journal ({today.isoformat()}):\n{_fmt(today_entries)}\n\n"
+        f"Yesterday's journal ({(today - timedelta(days=1)).isoformat()}):\n{_fmt(yesterday_entries)}\n\n"
+        f"Open goals for this week:\n{goals_text}\n\n"
+        f"Generate a concise, actionable daily plan for tomorrow ({tomorrow.isoformat()}).\n"
+        "Structure it as:\n"
+        "## Morning (high-focus)\n"
+        "## Afternoon (lower-focus)\n"
+        "## Don't forget\n\n"
+        "3-5 bullets per section maximum. Be specific — reference actual tasks from the journal. "
+        "Prioritise unfinished work and open goals. Use markdown."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    console.print(f"\n[bold cyan]Daily Plan for {tomorrow.isoformat()}[/bold cyan]\n")
+    console.print(f"[dim]Based on {len(today_entries)} today + {len(yesterday_entries)} yesterday entries, {len(open_goals)} open goal(s)[/dim]\n")
+
+    with client.messages.stream(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print("\n")

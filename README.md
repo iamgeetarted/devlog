@@ -1,5 +1,81 @@
 # devlog
 
+## What's New in v2.4.0
+
+### `devlog pin` — Pinboard for important entries
+
+Pin any entry to your personal pinboard and recall it instantly. Great for decisions, key discoveries, or entries you want to surface during reviews.
+
+```bash
+devlog pin add 42         # pin entry #42
+devlog pin                # show pinboard (alias for "devlog pin list")
+devlog pin list           # list all pinned entries
+devlog pin remove 42      # unpin
+```
+
+```
+╭─ Pinboard (2 entries) ─────────────────────────────────────────────────────╮
+│   ID  Date        Tag      Entry                                           │
+│   42  2026-05-21  feat     Decided on async architecture for the ingestion │
+│   17  2026-05-14  research Benchmarked 3 DB strategies — Postgres wins     │
+╰────────────────────────────────────────────────────────────────────────────╯
+```
+
+---
+
+### `devlog correlate` — Mood × Tag correlation table
+
+See which types of work leave you energised vs drained. Computes average mood per tag over the last N days and shows deviation from your baseline.
+
+```bash
+devlog correlate               # last 90 days
+devlog correlate --days 30     # shorter window
+```
+
+```
+╭─ Mood × Tag Correlation — last 90 days ──────────────────────────────────╮
+│  Tag       Entries  Avg mood  vs. avg  Distribution                      │
+│  feat           23      4.2    +0.6   ▓▓▓▓▓▓▓▓▓▓▓▓                      │
+│  research        8      3.9    +0.3   ▓▓▓▓▓▓▓▓▓▓▓                       │
+│  docs            6      3.6    +0.0   ▓▓▓▓▓▓▓▓▓▓                        │
+│  fix            15      3.2    -0.4   ▓▓▓▓▓▓▓▓▓                         │
+│  meeting        11      2.4    -1.2   ▓▓▓▓▓▓▓                           │
+╰──────────────────────────────────────────────────────────────────────────╯
+  Overall avg mood: 3.6/5  ·  63 entries with mood data
+  Happiest tag: feat (avg 4.2/5)  ·  Hardest tag: meeting (avg 2.4/5)
+```
+
+---
+
+### `devlog ai-plan` — AI daily plan for tomorrow
+
+Streams a structured daily plan for tomorrow based on today's journal entries, yesterday's notes, and your open weekly goals.
+
+```bash
+devlog ai-plan
+```
+
+```
+Daily Plan for 2026-05-29
+
+Based on 4 today + 2 yesterday entries, 2 open goal(s)
+
+## Morning (high-focus)
+- Finish the async ingestion PR — you noted it's 80% done (#fix, started today)
+- Write tests for the new retry logic before moving on
+
+## Afternoon (lower-focus)
+- Update docs/ARCHITECTURE.md (goal: "document the data pipeline")
+- Review open PRs from teammates
+
+## Don't forget
+- Run the weekly correlate report to close the loop on mood tracking
+```
+
+Requires `ANTHROPIC_API_KEY`.
+
+---
+
 ## What's New in v2.3.0
 
 ### `devlog habit` — Daily habit tracker with streaks and Rich history view
