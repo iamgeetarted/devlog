@@ -1460,6 +1460,31 @@ def main():
     p_plan = sub.add_parser("ai-plan", help="AI-generated daily plan for tomorrow (requires ANTHROPIC_API_KEY)")
     p_plan.set_defaults(func=cmd_ai_plan)
 
+    # template subcommand
+    p_template = sub.add_parser("template", help="List and use quick-entry templates")
+    template_sub = p_template.add_subparsers(dest="template_cmd")
+    template_sub.add_parser("list", help="List all built-in and custom templates (default)")
+    pt_use = template_sub.add_parser("use", help="Show a template's full text and usage hint")
+    pt_use.add_argument("name", help="Template name, e.g. standup, retro, incident, pr-review, sprint")
+    p_template.set_defaults(func=cmd_template)
+
+    # compare subcommand
+    p_compare = sub.add_parser("compare", help="Side-by-side stats comparison of two months")
+    p_compare.add_argument("--period1", metavar="YYYY-MM",
+                           help="First period (default: last month)")
+    p_compare.add_argument("--period2", metavar="YYYY-MM",
+                           help="Second period (default: current month)")
+    p_compare.add_argument("--ai", action="store_true",
+                           help="Stream an AI narrative of the comparison (requires ANTHROPIC_API_KEY)")
+    p_compare.set_defaults(func=cmd_compare)
+
+    # ai-year subcommand
+    p_ai_year = sub.add_parser(
+        "ai-year",
+        help="Annual AI retrospective for the last 365 days (requires ANTHROPIC_API_KEY)",
+    )
+    p_ai_year.set_defaults(func=cmd_ai_year)
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -2610,6 +2635,337 @@ def cmd_ai_plan(args: argparse.Namespace) -> None:
     with client.messages.stream(
         model="claude-haiku-4-5-20251001",
         max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print("\n")
+
+
+# ---------------------------------------------------------------------------
+# NEW: template — list and preview quick-entry templates
+# ---------------------------------------------------------------------------
+
+_BUILTIN_TEMPLATES: dict[str, str] = {
+    "standup": "## Yesterday\n\n## Today\n\n## Blockers\n\n",
+    "retro": "## Went well\n\n## To improve\n\n## Action item: ",
+    "incident": "## Incident: \n\n## Impact: \n\n## Root cause: \n\n## Fix applied: \n\n## Prevention: ",
+    "pr-review": "## PR: \n\n## Summary: \n\n## Feedback: \n\n## Decision: approve / request changes",
+    "sprint": "## Sprint goal: \n\n## Completed:\n- \n\n## Carried over:\n- \n\n## Notes: ",
+}
+
+
+def cmd_template(args: argparse.Namespace) -> None:
+    """List built-in and custom entry templates, or preview one by name."""
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+    from rich.markdown import Markdown
+
+    custom: dict[str, str] = _cfg.get("templates", {}) or {}
+    subcmd: str = getattr(args, "template_cmd", None) or "list"
+
+    if subcmd == "list":
+        t = Table(
+            box=rbox.ROUNDED, show_header=True,
+            header_style="bold cyan", border_style="dim",
+        )
+        t.add_column("Name", style="cyan", no_wrap=True)
+        t.add_column("Kind", style="dim", width=8)
+        t.add_column("Preview", style="dim")
+        for name, text in _BUILTIN_TEMPLATES.items():
+            preview = text.replace("\n", "  ").strip()[:65]
+            t.add_row(name, "built-in", preview)
+        for name, text in custom.items():
+            preview = (text or "").replace("\n", "  ").strip()[:65]
+            t.add_row(name, "[yellow]custom[/yellow]", preview)
+        total = len(_BUILTIN_TEMPLATES) + len(custom)
+        console.print(Panel(t, title=f"Templates ({total})", border_style="cyan", box=rbox.ROUNDED))
+        console.print(
+            "[dim]Use as prefix:  devlog add -T NAME \"your note here\"[/dim]\n"
+            "[dim]Preview full:   devlog template use NAME[/dim]"
+        )
+
+    elif subcmd == "use":
+        name: str = args.name
+        text = custom.get(name) or _BUILTIN_TEMPLATES.get(name)
+        if text is None:
+            available = list(_BUILTIN_TEMPLATES) + list(custom)
+            console.print(f"[red]✗ Template '{name}' not found.[/red]")
+            console.print(f"  Available: {', '.join(available) or '(none)'}")
+            return
+        console.print(
+            Panel(
+                Markdown(text),
+                title=f"[cyan]template: {name}[/cyan]",
+                border_style="cyan",
+                box=rbox.ROUNDED,
+            )
+        )
+        console.print(f"[dim]Use: devlog add -T {name} \"your note here\"[/dim]")
+
+    else:
+        console.print("[dim]Usage: devlog template list | use NAME[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# NEW: compare — side-by-side monthly comparison with optional AI narrative
+# ---------------------------------------------------------------------------
+
+def cmd_compare(args: argparse.Namespace) -> None:
+    """Show a side-by-side stats comparison of two calendar months."""
+    import re
+    from calendar import monthrange
+    from datetime import date
+    from collections import Counter
+    from rich.table import Table, box as rbox
+    from rich.panel import Panel
+
+    def _parse_month(s: str) -> tuple[int, int]:
+        m = re.match(r"^(\d{4})-(\d{2})$", s)
+        if not m:
+            raise ValueError(f"Invalid month format '{s}'. Use YYYY-MM.")
+        return int(m.group(1)), int(m.group(2))
+
+    today = date.today()
+
+    try:
+        if args.period1:
+            year1, month1 = _parse_month(args.period1)
+        else:
+            if today.month == 1:
+                year1, month1 = today.year - 1, 12
+            else:
+                year1, month1 = today.year, today.month - 1
+
+        if args.period2:
+            year2, month2 = _parse_month(args.period2)
+        else:
+            year2, month2 = today.year, today.month
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        return
+
+    label1 = date(year1, month1, 1).strftime("%B %Y")
+    label2 = date(year2, month2, 1).strftime("%B %Y")
+    prefix1 = f"{year1}-{month1:02d}"
+    prefix2 = f"{year2}-{month2:02d}"
+
+    all_entries = load_entries()
+    entries1 = [e for e in all_entries if e["date"].startswith(prefix1)]
+    entries2 = [e for e in all_entries if e["date"].startswith(prefix2)]
+
+    _, days1 = monthrange(year1, month1)
+    _, days2 = monthrange(year2, month2)
+
+    def _stats(entries: list[dict], days: int) -> dict:
+        tags: Counter = Counter(e.get("tag") for e in entries if e.get("tag"))
+        active = len({e["date"] for e in entries})
+        moods = [e["mood"] for e in entries if e.get("mood") is not None]
+        return {
+            "count": len(entries),
+            "active": active,
+            "coverage": round(active / days * 100) if days else 0,
+            "rate": round(len(entries) / days, 1) if days else 0,
+            "top_tags": tags.most_common(5),
+            "avg_mood": round(sum(moods) / len(moods), 1) if moods else None,
+            "mood_n": len(moods),
+        }
+
+    s1 = _stats(entries1, days1)
+    s2 = _stats(entries2, days2)
+
+    def _delta(v2: float | None, v1: float | None) -> str:
+        if v1 is None or v2 is None:
+            return "[dim]—[/dim]"
+        diff = round(v2 - v1, 1)
+        if diff > 0:
+            return f"[green]+{diff}[/green]"
+        if diff < 0:
+            return f"[red]{diff}[/red]"
+        return "[dim]=0[/dim]"
+
+    t = Table(
+        box=rbox.ROUNDED, show_header=True,
+        header_style="bold cyan", border_style="cyan",
+    )
+    t.add_column("Metric", style="cyan", no_wrap=True)
+    t.add_column(label1, justify="right", style="dim")
+    t.add_column(label2, justify="right", style="white")
+    t.add_column("Δ", justify="right")
+
+    t.add_row("Total entries", str(s1["count"]), str(s2["count"]),
+              _delta(s2["count"], s1["count"]))
+    t.add_row("Active days", f"{s1['active']}/{days1}", f"{s2['active']}/{days2}",
+              _delta(s2["active"], s1["active"]))
+    t.add_row("Coverage", f"{s1['coverage']}%", f"{s2['coverage']}%",
+              _delta(s2["coverage"], s1["coverage"]))
+    t.add_row("Avg / day", str(s1["rate"]), str(s2["rate"]),
+              _delta(s2["rate"], s1["rate"]))
+    if s1["avg_mood"] is not None or s2["avg_mood"] is not None:
+        m1 = f"{s1['avg_mood']}/5" if s1["avg_mood"] is not None else "—"
+        m2 = f"{s2['avg_mood']}/5" if s2["avg_mood"] is not None else "—"
+        t.add_row("Avg mood", m1, m2, _delta(s2["avg_mood"], s1["avg_mood"]))
+
+    console.print(Panel(t, title=f"Comparison: {label1} → {label2}",
+                        border_style="cyan", box=rbox.ROUNDED))
+
+    tags1: Counter = Counter(e.get("tag") for e in entries1 if e.get("tag"))
+    tags2: Counter = Counter(e.get("tag") for e in entries2 if e.get("tag"))
+    all_tags = sorted(set(list(tags1) + list(tags2)),
+                      key=lambda tag: -(tags2.get(tag, 0) + tags1.get(tag, 0)))
+
+    if all_tags:
+        tg = Table(box=rbox.SIMPLE, show_header=True, header_style="bold yellow", pad_edge=False)
+        tg.add_column("Tag", style="yellow")
+        tg.add_column(label1, justify="right", style="dim", width=8)
+        tg.add_column(label2, justify="right", style="white", width=8)
+        tg.add_column("Δ", justify="right", width=5)
+        for tag in all_tags:
+            c1, c2 = tags1.get(tag, 0), tags2.get(tag, 0)
+            tg.add_row(tag, str(c1) if c1 else "·", str(c2) if c2 else "·",
+                       _delta(float(c2), float(c1)))
+        console.print(Panel(tg, title="Tag Breakdown", border_style="yellow", box=rbox.ROUNDED))
+
+    if getattr(args, "ai", False):
+        _cmd_compare_ai(entries1, entries2, label1, label2, s1, s2)
+
+
+def _cmd_compare_ai(
+    entries1: list[dict],
+    entries2: list[dict],
+    label1: str,
+    label2: str,
+    s1: dict,
+    s2: dict,
+) -> None:
+    """Stream an AI narrative comparing two periods."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+
+    def _sample(entries: list[dict], n: int = 12) -> str:
+        return "\n".join(
+            f"- [{e['date']} {e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+            for e in entries[-n:]
+        ) or "(none)"
+
+    prompt = (
+        f"Compare two months of developer journal activity.\n\n"
+        f"{label1}: {s1['count']} entries, {s1['active']} active days, "
+        f"avg mood {s1['avg_mood'] or 'N/A'}/5\n"
+        f"Sample entries:\n{_sample(entries1)}\n\n"
+        f"{label2}: {s2['count']} entries, {s2['active']} active days, "
+        f"avg mood {s2['avg_mood'] or 'N/A'}/5\n"
+        f"Sample entries:\n{_sample(entries2)}\n\n"
+        "Write a concise 4-5 sentence comparison:\n"
+        "1. What changed between the two periods (volume, focus, mood)\n"
+        "2. What seems to have gone well in the more recent period\n"
+        "3. One observation or recommendation for next month\n"
+        "Use markdown."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    console.print(f"\n[bold cyan]AI Comparison: {label1} → {label2}[/bold cyan]\n")
+    with client.messages.stream(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            print(text, end="", flush=True)
+    print("\n")
+
+
+# ---------------------------------------------------------------------------
+# NEW: ai-year — annual AI retrospective for the last 365 days
+# ---------------------------------------------------------------------------
+
+def cmd_ai_year(args: argparse.Namespace) -> None:
+    """Stream a comprehensive annual retrospective based on the last 365 days."""
+    from datetime import date, timedelta
+    from collections import Counter
+
+    try:
+        import anthropic
+    except ImportError:
+        console.print("[red]Install anthropic: pip install anthropic[/red]")
+        return
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        console.print("[red]Set ANTHROPIC_API_KEY first.[/red]")
+        return
+
+    today = date.today()
+    since = (today - timedelta(days=365)).isoformat()
+    all_entries = load_entries()
+    year_entries = [e for e in all_entries if e.get("date", "") >= since]
+
+    if not year_entries:
+        console.print(f"[yellow]No entries found in the last 365 days (since {since}).[/yellow]")
+        return
+
+    tag_counts: Counter = Counter(e.get("tag") for e in year_entries if e.get("tag"))
+    active_days = len({e["date"] for e in year_entries})
+    moods = [e["mood"] for e in year_entries if e.get("mood") is not None]
+    avg_mood = round(sum(moods) / len(moods), 1) if moods else None
+
+    month_counts: Counter = Counter(e["date"][:7] for e in year_entries)
+    monthly_lines = "\n".join(
+        f"  {m}: {c} entries" for m, c in sorted(month_counts.items())
+    )
+
+    step = max(1, len(year_entries) // 30)
+    sampled = year_entries[::step][:30]
+    sample_text = "\n".join(
+        f"- [{e['date']} {e['time']}]{' [' + e['tag'] + ']' if e.get('tag') else ''} {e['text']}"
+        for e in sampled
+    )
+
+    mood_line = (
+        f"Average mood: {avg_mood}/5 across {len(moods)} data points"
+        if avg_mood is not None
+        else "No mood data recorded"
+    )
+
+    prompt = (
+        f"Here is a summary of my developer journal for the past year "
+        f"({since} → {today.isoformat()}).\n\n"
+        f"Stats:\n"
+        f"  Total entries: {len(year_entries)}\n"
+        f"  Active logging days: {active_days} of 365\n"
+        f"  Top tags: {dict(tag_counts.most_common(8))}\n"
+        f"  {mood_line}\n\n"
+        f"Monthly entry volume:\n{monthly_lines}\n\n"
+        f"Representative sample entries (every ~{step}th entry across the year):\n"
+        f"{sample_text}\n\n"
+        "Write a thoughtful annual retrospective using these sections:\n\n"
+        "## Year in Review\n"
+        "## Major Themes\n"
+        "## Accomplishments\n"
+        "## Patterns & Observations\n"
+        "## Looking Forward\n\n"
+        "Be specific — reference actual work from the entries. 3–5 bullet points per section. "
+        "Markdown formatting."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    year_range = f"{since[:4]}–{today.isoformat()[:4]}"
+    console.print(f"\n[bold cyan]Annual Review — {year_range}[/bold cyan]\n")
+    console.print(
+        f"[dim]{len(year_entries)} entries  ·  {active_days} active days  "
+        f"·  {len(tag_counts)} distinct tags  ·  {len(moods)} mood data points[/dim]\n"
+    )
+
+    with client.messages.stream(
+        model="claude-sonnet-4-6",
+        max_tokens=1400,
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         for text in stream.text_stream:

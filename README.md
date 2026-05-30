@@ -1,5 +1,97 @@
 # devlog
 
+## What's New in v2.5.0
+
+### `devlog template` — Built-in quick-entry templates
+
+Five built-in templates for common developer workflows (standup, retro, incident, pr-review, sprint), plus full support for custom templates defined in `~/.devlog.toml`.
+
+```bash
+devlog template list          # show all built-in and custom templates
+devlog template use standup   # preview the standup template
+devlog add -T standup "filled in my standup"  # use as entry prefix
+```
+
+```
+╭─ Templates (5) ─────────────────────────────────────────────────────────────╮
+│  Name       Kind      Preview                                               │
+│  standup    built-in  ## Yesterday    ## Today    ## Blockers               │
+│  retro      built-in  ## Went well    ## To improve    ## Action item:      │
+│  incident   built-in  ## Incident:    ## Impact:    ## Root cause:          │
+│  pr-review  built-in  ## PR:    ## Summary:    ## Feedback:    ## Decision: │
+│  sprint     built-in  ## Sprint goal:    ## Completed: -    ## Carried …    │
+╰─────────────────────────────────────────────────────────────────────────────╯
+Use as prefix:  devlog add -T NAME "your note here"
+Preview full:   devlog template use NAME
+```
+
+Add custom templates in `~/.devlog.toml`:
+```toml
+[templates]
+deploy = "## What shipped: \n\n## Rollback plan: \n\n## Monitoring: "
+research = "## Question: \n\n## Findings: \n\n## Next step: "
+```
+
+---
+
+### `devlog compare` — Side-by-side monthly comparison
+
+Compare any two calendar months — entry volume, active days, coverage %, average mood, and tag breakdown — all in a single Rich table. Add `--ai` for a streaming narrative.
+
+```bash
+devlog compare                          # last month vs this month
+devlog compare --period1 2026-03 --period2 2026-05
+devlog compare --period1 2026-03 --period2 2026-05 --ai
+```
+
+```
+╭─ Comparison: March 2026 → May 2026 ─────────────────────────────────────╮
+│  Metric        March 2026  May 2026   Δ                                  │
+│  Total entries         31        48   +17                                │
+│  Active days        12/31      21/31   +9                                │
+│  Coverage             39%       68%   +29                                │
+│  Avg / day            1.0       1.5   +0.5                               │
+│  Avg mood            3.2/5     3.8/5  +0.6                               │
+╰──────────────────────────────────────────────────────────────────────────╯
+╭─ Tag Breakdown ──────────────────────╮
+│  Tag      March 2026  May 2026   Δ   │
+│  feat              8        15  +7   │
+│  bug               5         6  +1   │
+│  fix               3         9  +6   │
+│  docs              4         3  −1   │
+╰──────────────────────────────────────╯
+```
+
+---
+
+### `devlog ai-year` — Annual AI retrospective
+
+A streaming, Claude-powered year-in-review that analyses the last 365 days of journal entries: major themes, accomplishments, patterns, and concrete goals for the year ahead. Uses `claude-sonnet-4-6` for a deeper analysis than the weekly review.
+
+```bash
+devlog ai-year
+```
+
+```
+Annual Review — 2025–2026
+
+365 entries  ·  218 active days  ·  14 distinct tags  ·  109 mood data points
+
+## Year in Review
+- Shipped 3 major product features (auth overhaul, async pipeline, v2 API)
+- Transitioned from monolith to microservices architecture — reflected in
+  surge of [infra] and [deploy] entries in Q3
+
+## Major Themes
+- API design and async architecture dominated H1
+- Performance optimisation became the H2 focus after the v2 launch
+...
+```
+
+Requires `ANTHROPIC_API_KEY`.
+
+---
+
 ## What's New in v2.4.0
 
 ### `devlog pin` — Pinboard for important entries
